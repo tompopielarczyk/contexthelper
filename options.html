@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ContextHelper — Settings</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="options.css">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/icon32.png">
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <div class="header-brand">
+        <div class="logo-mark">
+          <svg width="24" height="24" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M64 18 L73 50 L105 59 L73 68 L64 100 L55 68 L23 59 L55 50Z" fill="white"/>
+            <path d="M99 12 L102 23 L113 26 L102 29 L99 40 L96 29 L85 26 L96 23Z" fill="white" opacity="0.5"/>
+            <path d="M31 90 L33 98 L41 100 L33 102 L31 110 L29 102 L21 100 L29 98Z" fill="white" opacity="0.35"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-name">ContextHelper</h1>
+          <p class="brand-tagline">AI-powered text actions</p>
+        </div>
+      </div>
+      <button type="button" id="darkModeToggle" class="btn-icon dark-mode-toggle" title="Dark mode">
+        <svg id="darkModeIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </button>
+    </header>
+
+    <main class="main">
+      <!-- Section 1: Model Configurations -->
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Models</h2>
+            <p class="card-desc">Configure AI models and their API keys</p>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div id="modelConfigsList" class="model-configs-list"></div>
+
+          <button type="button" id="addModelConfig" class="btn btn-dashed">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Add model
+          </button>
+        </div>
+      </section>
+
+      <!-- Section 2: System Prompt -->
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">System prompt</h2>
+          <p class="card-desc">Global instructions sent with every request</p>
+        </div>
+
+        <div class="card-body">
+          <textarea id="systemPrompt" class="input system-prompt-input" rows="3" placeholder="e.g. Respond in plain text. Be concise and helpful."></textarea>
+        </div>
+      </section>
+
+      <!-- Section 3: Tooltip Appearance -->
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">Tooltip appearance</h2>
+          <p class="card-desc">Customize the look of the result popup</p>
+        </div>
+
+        <div class="card-body">
+          <div class="tooltip-settings-grid">
+            <div class="field">
+              <label class="field-label" for="tooltipBgColor">Background color</label>
+              <div class="color-input-group">
+                <input type="color" id="tooltipBgColor" class="input-color" value="#ffffff">
+                <input type="text" id="tooltipBgColorText" class="input input-color-text" value="#ffffff" maxlength="7" placeholder="#ffffff">
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="tooltipFontColor">Font color</label>
+              <div class="color-input-group">
+                <input type="color" id="tooltipFontColor" class="input-color" value="#1f2937">
+                <input type="text" id="tooltipFontColorText" class="input input-color-text" value="#1f2937" maxlength="7" placeholder="#1f2937">
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="tooltipFontSize">Font size</label>
+              <div class="range-input-group">
+                <input type="range" id="tooltipFontSize" class="input-range" min="10" max="24" value="14" step="1">
+                <span id="tooltipFontSizeValue" class="range-value">14px</span>
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="tooltipPosition">Position</label>
+              <select id="tooltipPosition" class="input input-select">
+                <option value="below">Below selection</option>
+                <option value="above">Above selection</option>
+                <option value="left">Left of selection</option>
+                <option value="right">Right of selection</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 3: Actions -->
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Actions</h2>
+            <p class="card-desc">Actions shown in the context menu. Drag to reorder.</p>
+          </div>
+          <div class="card-header-actions">
+            <button type="button" id="restoreDefaults" class="btn btn-ghost">Restore defaults</button>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div id="actionsList" class="actions-list"></div>
+
+          <button type="button" id="addAction" class="btn btn-dashed">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Add action
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <button type="button" id="saveBtn" class="btn btn-primary">Save settings</button>
+      <span id="saveStatus" class="save-status" hidden></span>
+    </footer>
+  </div>
+
+  <!-- Model config card template -->
+  <template id="modelConfigTemplate">
+    <div class="model-config-card">
+      <div class="model-config-header">
+        <input type="text" class="input model-config-name" placeholder="e.g. Claude Sonnet" data-field="name">
+        <button type="button" class="btn-icon model-config-delete" title="Delete model">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+        </button>
+      </div>
+      <div class="model-config-body">
+        <div class="model-config-row">
+          <div class="field">
+            <label class="field-label">Provider</label>
+            <select class="input input-select model-config-provider">
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="openai">OpenAI (GPT)</option>
+              <option value="google">Google (Gemini)</option>
+              <option value="openrouter">OpenRouter</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label">Model</label>
+            <select class="input input-select model-config-model"></select>
+            <input type="text" class="input input-custom-model model-config-custom-model" placeholder="Model ID" hidden>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label">API Key</label>
+          <div class="input-group">
+            <input type="password" class="input input-key model-config-apikey" placeholder="sk-..." autocomplete="off">
+            <button type="button" class="btn-icon model-config-toggle-key" title="Show/hide key">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="field-row">
+          <button type="button" class="btn btn-secondary model-config-test">
+            <span class="btn-text">Test</span>
+            <span class="btn-spinner" hidden></span>
+          </button>
+          <span class="test-result model-config-test-result" hidden></span>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Action card template -->
+  <template id="actionTemplate">
+    <div class="action-card" draggable="true">
+      <div class="action-drag-handle" title="Drag to reorder">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/>
+        </svg>
+      </div>
+      <div class="action-fields">
+        <input type="text" class="input action-name" placeholder="Action name" data-field="name">
+        <textarea class="input action-template" placeholder="Template (use {{text}} as placeholder)" rows="3" data-field="template"></textarea>
+        <div class="action-meta-row">
+          <span class="action-hint">Use <code>{{text}}</code> as placeholder for the selected text</span>
+          <select class="input input-select action-model-config" data-field="modelConfigId" title="Model to use">
+          </select>
+          <select class="input input-select action-display-mode" data-field="displayMode" title="Result display mode">
+            <option value="auto">Auto</option>
+            <option value="tooltip">Tooltip</option>
+            <option value="insert">Insert text</option>
+          </select>
+        </div>
+      </div>
+      <button type="button" class="btn-icon action-delete" title="Delete action">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+        </svg>
+      </button>
+    </div>
+  </template>
+
+  <script src="options.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+/*
+ * Host element styles — the Shadow DOM handles internal styling.
+ * This file prevents host page CSS from interfering with the overlay.
+ */
+#contexthelper-overlay-host {
+  all: initial !important;
+}
