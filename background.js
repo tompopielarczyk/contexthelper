@@ -74,6 +74,8 @@ async function handleMenuClick(info, tab) {
   const selectedText = info.selectionText;
   if (!selectedText?.trim()) return;
 
+  await ensureContentScript(tab.id);
+
   // Notify content script: show loading indicator
   await sendToTab(tab.id, {
     type: 'AI_PROCESSING_START',
@@ -123,6 +125,31 @@ async function handleMenuClick(info, tab) {
     if (_currentAbortController?.signal === signal) {
       _currentAbortController = null;
     }
+  }
+}
+
+async function ensureContentScript(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!window.__contexthelper_loaded
+    });
+    if (results[0]?.result) return;
+  } catch {
+    return;
+  }
+
+  try {
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      files: ['content.css']
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content.js']
+    });
+  } catch {
+    // Restricted page (chrome://, about:, etc.)
   }
 }
 

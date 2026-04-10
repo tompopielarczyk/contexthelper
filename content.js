@@ -1,6 +1,8 @@
 (() => {
   'use strict';
 
+  if (window.__contexthelper_loaded) return;
+
   let overlayHost = null;
   let shadowRoot = null;
   let lastSelectionRect = null;
@@ -36,16 +38,29 @@
   // Also capture on contextmenu for right-click
   document.addEventListener('contextmenu', captureSelectionRect);
 
+  // Capture selection present at injection time (script loads after context menu click)
+  function captureInitialSelection() {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      if (rect && (rect.width > 0 || rect.height > 0)) {
+        lastSelectionRect = rect;
+        return;
+      }
+    }
+    const activeEl = document.activeElement;
+    if (isTextControl(activeEl) && activeEl.selectionStart != null && activeEl.selectionEnd != null && activeEl.selectionEnd > activeEl.selectionStart) {
+      lastSelectionRect = activeEl.getBoundingClientRect();
+    }
+  }
+  captureInitialSelection();
+
   chrome.runtime.onMessage.addListener((message) => {
     const ts = message.tooltipSettings;
 
-    if (message.requestId !== undefined && message.requestId < activeRequestId) {
-      return;
-    }
-
     switch (message.type) {
       case 'AI_PROCESSING_START':
-        activeRequestId = message.requestId;
+        if (message.requestId !== undefined) activeRequestId = message.requestId;
         showLoading(ts);
         break;
       case 'AI_RESULT':
@@ -656,4 +671,6 @@
       }
     `;
   }
+
+  window.__contexthelper_loaded = true;
 })();
