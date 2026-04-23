@@ -322,7 +322,15 @@ function addActionCard(action) {
     }
   });
 
-  // Drag & drop
+  // Drag & drop — only armed when grabbed via the dedicated handle
+  const dragHandle = card.querySelector('.action-drag-handle');
+  const disarmDrag = () => { card.draggable = false; };
+  dragHandle.addEventListener('mousedown', () => {
+    card.draggable = true;
+    document.addEventListener('mouseup', disarmDrag, { once: true });
+  });
+  card.addEventListener('dragend', disarmDrag);
+
   card.addEventListener('dragstart', onDragStart);
   card.addEventListener('dragend', onDragEnd);
   card.addEventListener('dragover', onDragOver);
