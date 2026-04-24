@@ -1,5 +1,6 @@
 import { getSettings, onSettingsChanged, isFirstRun, markInitialized } from './lib/storage.js';
 import { callAI } from './lib/api-client.js';
+import { sendWebhook, buildWebhookPayload } from './lib/webhook.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
 
@@ -56,6 +57,36 @@ function resolveModelConfig(configs, configId) {
   return configs[0];
 }
 
+function resolveWebhook(webhooks, webhookId) {
+  if (!webhookId || !webhooks?.length) return null;
+  return webhooks.find(w => w.id === webhookId) || null;
+}
+
+function willShowTooltip(displayMode, editable) {
+  if (displayMode === 'tooltip') return true;
+  if (displayMode === 'insert') return false;
+  // 'auto' (default): tooltip iff context is read-only
+  return !editable;
+}
+
+function dispatchWebhook({ webhook, action, result, sourceText, modelUsed, tab, requestId }) {
+  const payload = buildWebhookPayload({
+    action,
+    result,
+    sourceText,
+    pageUrl: tab?.url || '',
+    pageTitle: tab?.title || '',
+    modelUsed
+  });
+  sendWebhook(webhook, payload).catch((err) => {
+    sendToTab(tab.id, {
+      type: 'WEBHOOK_FAILED',
+      requestId,
+      message: err?.message || 'Webhook delivery failed'
+    });
+  });
+}
+
 async function handleMenuClick(info, tab) {
   const match = info.menuItemId.match(/^action-(\d+)$/);
   if (!match) return;
@@ -105,14 +136,29 @@ async function handleMenuClick(info, tab) {
 
     if (signal.aborted) return;
 
+    const displayMode = action.displayMode || 'auto';
+
     await sendToTab(tab.id, {
       type: 'AI_RESULT',
       requestId,
       text: result,
       editable: info.editable,
-      displayMode: action.displayMode || 'auto',
+      displayMode,
       tooltipSettings: settings.tooltipSettings
     });
+
+    const webhook = resolveWebhook(settings.webhooks, action.webhookId);
+    if (webhook && willShowTooltip(displayMode, info.editable)) {
+      dispatchWebhook({
+        webhook,
+        action,
+        result,
+        sourceText: selectedText,
+        modelUsed: config.model || '',
+        tab,
+        requestId
+      });
+    }
   } catch (err) {
     if (signal.aborted) return;
     await sendToTab(tab.id, {

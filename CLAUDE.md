@@ -50,9 +50,9 @@ Three message types flow via `chrome.tabs.sendMessage`:
 
 **Shadow DOM isolation** — all UI (tooltip, spinner) lives inside a closed Shadow DOM attached to a host `div`. This prevents host page styles from leaking in. `content.css` resets the host element (`all: initial !important`), while internal styles are injected via `getShadowStyles()` into the shadow root. Keep both in sync — `content.css` protects against host-page interference, `getShadowStyles()` defines the actual component styles.
 
-**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey }` — contains secrets, not synced to Google account). `chrome.storage.sync` holds `actions`, `tooltipSettings`, `darkMode`. Actions reference model configs via `modelConfigId`. The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
+**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey }`) and `webhooks` (array of `{ id, name, url, method, headers }`) — both contain secrets and are not synced to Google account. `chrome.storage.sync` holds `actions`, `tooltipSettings`, `systemPrompt`, `darkMode`. Actions reference model configs via `modelConfigId` and webhooks via `webhookId`. The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
 
-**Migration** — `getSettings()` auto-migrates old single-provider data (separate `provider`, `model`, `apiKey` fields) into a `modelConfigs` array on first access. The migration is idempotent: it checks if `modelConfigs === null` (never set), creates one config from old fields, assigns it to all actions, and cleans up old keys.
+**Migration** — `getSettings()` auto-migrates two legacy schemas: (1) old single-provider data (separate `provider`, `model`, `apiKey` fields) into a `modelConfigs` array on first access — idempotent via `modelConfigs === null` check, creates one config from old fields, assigns it to all actions, cleans up old keys. (2) Legacy boolean `darkMode` is mapped to the tri-state form: `true` → `'dark'`, `false` → `'auto'`. New installs default to `'auto'`, which follows `prefers-color-scheme` via `matchMedia` (re-applied on system theme change while in `'auto'`).
 
 **Text replacement** has three strategies in `content.js`:
 - `replaceSelectedText()` — for editable inputs/textareas (native setter trick to bypass React synthetic events) and contenteditable (`document.execCommand('insertText')` to preserve undo stack)
@@ -76,6 +76,22 @@ Each action has a `displayMode` field:
 - `'auto'` — insert if the focused element is editable, otherwise tooltip
 - `'tooltip'` — always show result in floating tooltip
 - `'insert'` — always replace selected text (even in read-only DOM via `forceReplaceInDOM`)
+
+### Webhook delivery
+
+Actions can optionally POST their AI result to a user-configured external endpoint (Notion, Slack, Zapier, n8n, custom). Webhooks live in `chrome.storage.local` (Bearer tokens are secrets) under `webhooks: [{ id, name, url, method, headers: [{key,value}] }]`. Each action references one via `webhookId` (`''` = none).
+
+`background.js` calls `sendWebhook` only when the result will appear in a tooltip — i.e. `displayMode === 'tooltip'`, or `displayMode === 'auto'` with a non-editable selection (`!info.editable`). Insert mode skips webhook delivery. AI errors also skip webhook delivery (no point logging failures to Notion).
+
+Delivery is fire-and-forget: the tooltip renders immediately, the POST runs in the background. On failure, `background.js` sends a `WEBHOOK_FAILED` message to the content script, which attaches a small ⚠ badge in the bottom-left of the active tooltip with the error in its `title`. The badge is gated by `requestId` so a stale failure does not decorate a newer tooltip.
+
+Permissions are granted **per-origin at runtime** via `chrome.permissions.request` (triggered by the Test button in options). The manifest declares `optional_host_permissions: ["http://*/*", "https://*/*"]` so users only grant access to the specific origins they configure (e.g. `https://api.notion.com/*`). Without this prompt, fetch will fail at runtime — the user's first action will surface a "Network error" badge.
+
+The payload schema is fixed for now: `{ result, actionName, sourceText, pageUrl, pageTitle, timestamp, modelUsed }`. Adapter services (Zapier, n8n, custom) reshape this for downstream APIs that need different bodies (Slack `{text}`, Notion `{parent, properties, children}`). Templates are a future enhancement.
+
+### Options page tabs
+
+`options.html` is organized into 4 tabs (`Models | Webhooks | Appearance | Actions`). Each tab is a `<div class="tab-panel" data-tab="...">`; the System prompt sits inside the Actions tab as a separate card. `initTabs()` in `options.js` toggles `.active` and the `hidden` attribute on click. To add another tab: drop a `<button class="tab-btn" data-tab="X">` in the nav and a matching `<div class="tab-panel" data-tab="X" hidden>` in `<main>` — no JS change needed.
 
 ### Adding a new AI provider
 

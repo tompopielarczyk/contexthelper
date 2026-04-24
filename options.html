@@ -34,109 +34,144 @@
       </button>
     </header>
 
+    <nav class="tab-nav" role="tablist" aria-label="Settings sections">
+      <button type="button" class="tab-btn active" role="tab" aria-selected="true" data-tab="models">Models</button>
+      <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="webhooks">Webhooks</button>
+      <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="appearance">Appearance</button>
+      <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="actions">Actions</button>
+    </nav>
+
     <main class="main">
-      <!-- Section 1: Model Configurations -->
-      <section class="card">
-        <div class="card-header">
-          <div>
-            <h2 class="card-title">Models</h2>
-            <p class="card-desc">Configure AI models and their API keys</p>
+      <!-- Tab: Models -->
+      <div class="tab-panel active" role="tabpanel" data-tab="models">
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Models</h2>
+              <p class="card-desc">Configure AI models and their API keys</p>
+            </div>
           </div>
-        </div>
 
-        <div class="card-body">
-          <div id="modelConfigsList" class="model-configs-list"></div>
+          <div class="card-body">
+            <div id="modelConfigsList" class="model-configs-list"></div>
 
-          <button type="button" id="addModelConfig" class="btn btn-dashed">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            Add model
-          </button>
-        </div>
-      </section>
+            <button type="button" id="addModelConfig" class="btn btn-dashed">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Add model
+            </button>
+          </div>
+        </section>
+      </div>
 
-      <!-- Section 2: System Prompt -->
-      <section class="card">
-        <div class="card-header">
-          <h2 class="card-title">System prompt</h2>
-          <p class="card-desc">Global instructions sent with every request</p>
-        </div>
+      <!-- Tab: Webhooks -->
+      <div class="tab-panel" role="tabpanel" data-tab="webhooks" hidden>
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Webhooks</h2>
+              <p class="card-desc">POST AI results to external endpoints (Notion, Slack, Zapier, custom). Fires only when an action shows the result in a tooltip.</p>
+            </div>
+          </div>
 
-        <div class="card-body">
-          <textarea id="systemPrompt" class="input system-prompt-input" rows="3" placeholder="e.g. Respond in plain text. Be concise and helpful."></textarea>
-        </div>
-      </section>
+          <div class="card-body">
+            <div id="webhooksList" class="webhooks-list"></div>
 
-      <!-- Section 3: Tooltip Appearance -->
-      <section class="card">
-        <div class="card-header">
-          <h2 class="card-title">Tooltip appearance</h2>
-          <p class="card-desc">Customize the look of the result popup</p>
-        </div>
+            <button type="button" id="addWebhook" class="btn btn-dashed">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Add webhook
+            </button>
+          </div>
+        </section>
+      </div>
 
-        <div class="card-body">
-          <div class="tooltip-settings-grid">
-            <div class="field">
-              <label class="field-label" for="tooltipBgColor">Background color</label>
-              <div class="color-input-group">
-                <input type="color" id="tooltipBgColor" class="input-color" value="#ffffff">
-                <input type="text" id="tooltipBgColorText" class="input input-color-text" value="#ffffff" maxlength="7" placeholder="#ffffff">
+      <!-- Tab: Appearance -->
+      <div class="tab-panel" role="tabpanel" data-tab="appearance" hidden>
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">Tooltip appearance</h2>
+            <p class="card-desc">Customize the look of the result popup</p>
+          </div>
+
+          <div class="card-body">
+            <div class="tooltip-settings-grid">
+              <div class="field">
+                <label class="field-label" for="tooltipBgColor">Background color</label>
+                <div class="color-input-group">
+                  <input type="color" id="tooltipBgColor" class="input-color" value="#ffffff">
+                  <input type="text" id="tooltipBgColorText" class="input input-color-text" value="#ffffff" maxlength="7" placeholder="#ffffff">
+                </div>
+              </div>
+
+              <div class="field">
+                <label class="field-label" for="tooltipFontColor">Font color</label>
+                <div class="color-input-group">
+                  <input type="color" id="tooltipFontColor" class="input-color" value="#1f2937">
+                  <input type="text" id="tooltipFontColorText" class="input input-color-text" value="#1f2937" maxlength="7" placeholder="#1f2937">
+                </div>
+              </div>
+
+              <div class="field">
+                <label class="field-label" for="tooltipFontSize">Font size</label>
+                <div class="range-input-group">
+                  <input type="range" id="tooltipFontSize" class="input-range" min="10" max="24" value="14" step="1">
+                  <span id="tooltipFontSizeValue" class="range-value">14px</span>
+                </div>
+              </div>
+
+              <div class="field">
+                <label class="field-label" for="tooltipPosition">Position</label>
+                <select id="tooltipPosition" class="input input-select">
+                  <option value="below">Below selection</option>
+                  <option value="above">Above selection</option>
+                  <option value="left">Left of selection</option>
+                  <option value="right">Right of selection</option>
+                </select>
               </div>
             </div>
+          </div>
+        </section>
+      </div>
 
-            <div class="field">
-              <label class="field-label" for="tooltipFontColor">Font color</label>
-              <div class="color-input-group">
-                <input type="color" id="tooltipFontColor" class="input-color" value="#1f2937">
-                <input type="text" id="tooltipFontColorText" class="input input-color-text" value="#1f2937" maxlength="7" placeholder="#1f2937">
-              </div>
+      <!-- Tab: Actions -->
+      <div class="tab-panel" role="tabpanel" data-tab="actions" hidden>
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">System prompt</h2>
+            <p class="card-desc">Global instructions sent with every request</p>
+          </div>
+
+          <div class="card-body">
+            <textarea id="systemPrompt" class="input system-prompt-input" rows="3" placeholder="e.g. Respond in plain text. Be concise and helpful."></textarea>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Actions</h2>
+              <p class="card-desc">Actions shown in the context menu. Drag to reorder.</p>
             </div>
-
-            <div class="field">
-              <label class="field-label" for="tooltipFontSize">Font size</label>
-              <div class="range-input-group">
-                <input type="range" id="tooltipFontSize" class="input-range" min="10" max="24" value="14" step="1">
-                <span id="tooltipFontSizeValue" class="range-value">14px</span>
-              </div>
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="tooltipPosition">Position</label>
-              <select id="tooltipPosition" class="input input-select">
-                <option value="below">Below selection</option>
-                <option value="above">Above selection</option>
-                <option value="left">Left of selection</option>
-                <option value="right">Right of selection</option>
-              </select>
+            <div class="card-header-actions">
+              <button type="button" id="restoreDefaults" class="btn btn-ghost">Restore defaults</button>
             </div>
           </div>
-        </div>
-      </section>
 
-      <!-- Section 3: Actions -->
-      <section class="card">
-        <div class="card-header">
-          <div>
-            <h2 class="card-title">Actions</h2>
-            <p class="card-desc">Actions shown in the context menu. Drag to reorder.</p>
+          <div class="card-body">
+            <div id="actionsList" class="actions-list"></div>
+
+            <button type="button" id="addAction" class="btn btn-dashed">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Add action
+            </button>
           </div>
-          <div class="card-header-actions">
-            <button type="button" id="restoreDefaults" class="btn btn-ghost">Restore defaults</button>
-          </div>
-        </div>
-
-        <div class="card-body">
-          <div id="actionsList" class="actions-list"></div>
-
-          <button type="button" id="addAction" class="btn btn-dashed">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            Add action
-          </button>
-        </div>
-      </section>
+        </section>
+      </div>
     </main>
 
     <footer class="footer">
@@ -196,6 +231,61 @@
     </div>
   </template>
 
+  <!-- Webhook card template -->
+  <template id="webhookTemplate">
+    <div class="webhook-card">
+      <div class="webhook-header">
+        <input type="text" class="input webhook-name" placeholder="e.g. Notion - Reading Notes" data-field="name">
+        <button type="button" class="btn-icon webhook-delete" title="Delete webhook">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+        </button>
+      </div>
+      <div class="webhook-body">
+        <div class="webhook-url-row">
+          <div class="field webhook-method-field">
+            <label class="field-label">Method</label>
+            <select class="input input-select webhook-method">
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="PATCH">PATCH</option>
+            </select>
+          </div>
+          <div class="field webhook-url-field">
+            <label class="field-label">URL</label>
+            <input type="url" class="input webhook-url" placeholder="https://api.example.com/endpoint">
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label">Headers</label>
+          <div class="webhook-headers-list"></div>
+          <button type="button" class="btn btn-ghost webhook-add-header">+ Add header</button>
+        </div>
+        <div class="field-row">
+          <button type="button" class="btn btn-secondary webhook-test">
+            <span class="btn-text">Test</span>
+            <span class="btn-spinner" hidden></span>
+          </button>
+          <span class="test-result webhook-test-result" hidden></span>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Webhook header row template -->
+  <template id="webhookHeaderTemplate">
+    <div class="webhook-header-row">
+      <input type="text" class="input webhook-header-key" placeholder="Header name" autocomplete="off">
+      <input type="text" class="input webhook-header-value" placeholder="Value" autocomplete="off">
+      <button type="button" class="btn-icon webhook-header-delete" title="Remove header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  </template>
+
   <!-- Action card template -->
   <template id="actionTemplate">
     <div class="action-card" draggable="false">
@@ -217,6 +307,8 @@
             <option value="auto">Auto</option>
             <option value="tooltip">Tooltip</option>
             <option value="insert">Insert text</option>
+          </select>
+          <select class="input input-select action-webhook" data-field="webhookId" title="POST result to webhook (tooltip mode only)">
           </select>
         </div>
       </div>

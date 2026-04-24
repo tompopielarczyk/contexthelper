@@ -603,16 +603,8 @@ body {
   animation: slideUp 0.35s ease-out backwards;
 }
 
-.card:nth-child(2) {
+.tab-panel .card:nth-child(2) {
   animation-delay: 0.06s;
-}
-
-.card:nth-child(3) {
-  animation-delay: 0.12s;
-}
-
-.card:nth-child(4) {
-  animation-delay: 0.18s;
 }
 
 @keyframes slideUp {
@@ -878,4 +870,175 @@ body.dark .input-range::-moz-range-thumb {
 /* Dark mode toggle icon swap */
 body.dark .dark-mode-toggle svg {
   fill: currentColor;
+}
+
+/* ── Tabs ──────────────────────────────────────────── */
+.tab-nav {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--gray-200);
+  overflow-x: auto;
+}
+
+.tab-btn {
+  padding: 10px 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gray-500);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+
+.tab-btn:hover {
+  color: var(--gray-700);
+}
+
+.tab-btn.active {
+  color: var(--indigo-600);
+  border-bottom-color: var(--indigo-500);
+}
+
+.tab-btn:focus-visible {
+  outline: 2px solid var(--indigo-400);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.tab-panel[hidden] {
+  display: none;
+}
+
+body.dark .tab-nav {
+  border-bottom-color: var(--gray-200);
+}
+
+body.dark .tab-btn.active {
+  color: var(--indigo-400);
+  border-bottom-color: var(--indigo-400);
+}
+
+/* ── Webhooks ──────────────────────────────────────── */
+.webhooks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.webhook-card {
+  padding: 16px;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  animation: fadeIn 0.2s ease-out;
+  transition: border-color 0.15s;
+}
+
+.webhook-card:hover {
+  border-color: var(--gray-300);
+}
+
+.webhook-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.webhook-name {
+  font-weight: 600;
+  font-size: 14px;
+  flex: 1;
+}
+
+.webhook-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.webhook-body > .field {
+  margin-bottom: 0;
+}
+
+.webhook-url-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 12px;
+}
+
+.webhook-url-row .field {
+  margin-bottom: 0;
+}
+
+.webhook-url {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.webhook-headers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.webhook-header-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 34px;
+  gap: 6px;
+  align-items: center;
+}
+
+.webhook-header-key,
+.webhook-header-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.webhook-header-delete {
+  width: 30px;
+  height: 30px;
+}
+
+.webhook-header-delete:hover {
+  color: var(--red-500) !important;
+  background: var(--red-50) !important;
+}
+
+.webhook-add-header {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.webhook-delete:hover {
+  color: var(--red-500) !important;
+  background: var(--red-50) !important;
+}
+
+body.dark .webhook-card {
+  background: var(--gray-100);
+  border-color: var(--gray-200);
+}
+
+body.dark .webhook-card:hover {
+  border-color: var(--gray-300);
+}
+
+/* Action webhook dropdown — mirrors action-model-config */
+.action-webhook {
+  width: auto;
+  min-width: 120px;
+  max-width: 180px;
+  padding: 4px 28px 4px 8px;
+  font-size: 12px;
+  color: var(--gray-500);
+  background-position: right 6px center;
 }

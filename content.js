@@ -82,6 +82,10 @@
         hideOverlay();
         showErrorTooltip(message.message, ts);
         break;
+      case 'WEBHOOK_FAILED':
+        if (message.requestId !== activeRequestId) return;
+        addWebhookFailBadge(message.message);
+        break;
     }
   });
 
@@ -294,6 +298,21 @@
     };
     document.addEventListener('keydown', escHandler);
     activeCleanups.push(() => document.removeEventListener('keydown', escHandler));
+  }
+
+  function addWebhookFailBadge(errorMessage) {
+    if (!shadowRoot) return;
+    const tooltip = shadowRoot.querySelector('.cmn-tooltip');
+    if (!tooltip) return;
+    // Don't duplicate
+    if (tooltip.querySelector('.cmn-webhook-fail')) return;
+
+    const badge = document.createElement('div');
+    badge.className = 'cmn-webhook-fail';
+    badge.title = `Webhook failed: ${errorMessage || 'unknown error'}`;
+    badge.setAttribute('aria-label', badge.title);
+    badge.textContent = '⚠';
+    tooltip.appendChild(badge);
   }
 
   function isWritableTextControl(el) {
@@ -668,6 +687,25 @@
 
       .cmn-btn-close:hover {
         color: #4b5563;
+      }
+
+      .cmn-webhook-fail {
+        position: absolute;
+        bottom: 8px;
+        left: 10px;
+        font-size: 14px;
+        line-height: 1;
+        color: #b45309;
+        background: #fef3c7;
+        border: 1px solid #fde68a;
+        border-radius: 999px;
+        width: 20px;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: help;
+        user-select: none;
       }
     `;
   }
