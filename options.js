@@ -1,4 +1,4 @@
-import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId } from './lib/storage.js';
+import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId } from './lib/storage.js';
 import { getAvailableModels, getDefaultModel, callAI } from './lib/api-client.js';
 import { testWebhook, requestWebhookPermission, originPatternForUrl } from './lib/webhook.js';
 
@@ -30,6 +30,7 @@ const systemPromptInput = document.getElementById('systemPrompt');
 
 // ── State ───────────────────────────────────────────
 let draggedCard = null;
+let saveStatusTimeoutId = 0;
 
 const CUSTOM_MODEL_VALUE = '__custom__';
 
@@ -552,6 +553,7 @@ function renderActions(actions) {
 function addActionCard(action) {
   const fragment = actionTemplate.content.cloneNode(true);
   const card = fragment.querySelector('.action-card');
+  card.dataset.actionId = action.id || generateActionId();
 
   const nameInput = card.querySelector('.action-name');
   const templateInput = card.querySelector('.action-template');
@@ -719,15 +721,16 @@ function collectActions() {
     const modelConfigId = card.querySelector('.action-model-config').value;
     const webhookId = card.querySelector('.action-webhook')?.value || '';
     if (name) {
-      actions.push({ name, template, displayMode, modelConfigId, webhookId });
+      actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, webhookId });
     }
   }
   return actions;
 }
 
 function showSaveStatus(message, success) {
+  if (saveStatusTimeoutId) clearTimeout(saveStatusTimeoutId);
   saveStatus.textContent = message;
   saveStatus.className = `save-status ${success ? 'success' : 'error'}`;
   saveStatus.hidden = false;
-  setTimeout(() => { saveStatus.hidden = true; }, 3000);
+  saveStatusTimeoutId = setTimeout(() => { saveStatus.hidden = true; }, 3000);
 }

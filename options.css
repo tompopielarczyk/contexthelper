@@ -34,8 +34,8 @@
   --green-700: #15803d;
   --red-700: #b91c1c;
 
-  --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'DM Mono', 'Menlo', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 
   --radius: 10px;
   --radius-sm: 6px;
@@ -143,59 +143,6 @@ body {
 
 .card-header-actions {
   flex-shrink: 0;
-}
-
-/* ── Provider Toggle ───────────────────────────────── */
-.provider-toggle {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  margin-bottom: 20px;
-}
-
-.provider-option {
-  cursor: pointer;
-}
-
-.provider-option input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.provider-label {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 14px 16px;
-  border: 2px solid var(--gray-200);
-  border-radius: var(--radius);
-  transition: all 0.15s ease;
-  text-align: center;
-}
-
-.provider-option input:checked + .provider-label {
-  border-color: var(--indigo-500);
-  background: var(--indigo-50);
-}
-
-.provider-option input:focus-visible + .provider-label {
-  outline: 2px solid var(--indigo-400);
-  outline-offset: 2px;
-}
-
-.provider-name {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--gray-800);
-}
-
-.provider-hint {
-  font-size: 12px;
-  color: var(--gray-400);
-  font-family: var(--font-mono);
 }
 
 /* ── Form Fields ───────────────────────────────────── */
@@ -806,15 +753,6 @@ body.dark .action-card:hover {
   border-color: var(--gray-300);
 }
 
-body.dark .provider-label {
-  border-color: var(--gray-200);
-}
-
-body.dark .provider-option input:checked + .provider-label {
-  border-color: var(--indigo-400);
-  background: rgba(99, 102, 241, 0.15);
-}
-
 body.dark .footer {
   background: rgba(11, 15, 25, 0.9);
   border-top-color: var(--gray-200);
@@ -1041,4 +979,35 @@ body.dark .webhook-card:hover {
   font-size: 12px;
   color: var(--gray-500);
   background-position: right 6px center;
+}
+
+@media (max-width: 600px) {
+  .page {
+    padding: 24px 14px 96px;
+  }
+
+  .model-config-row,
+  .webhook-url-row,
+  .webhook-header-row {
+    grid-template-columns: 1fr;
+  }
+
+  .card-header,
+  .action-card,
+  .action-meta-row {
+    flex-wrap: wrap;
+  }
+
+  .action-fields,
+  .action-meta-row,
+  .action-model-config,
+  .action-display-mode,
+  .action-webhook {
+    width: 100%;
+    max-width: none;
+  }
+
+  .action-hint {
+    flex-basis: 100%;
+  }
 }

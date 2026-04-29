@@ -10,9 +10,9 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://*.anthropic.com/*",
-    "https://*.openai.com/*",
-    "https://openrouter.ai/*",
+    "https://api.anthropic.com/*",
+    "https://api.openai.com/*",
+    "https://openrouter.ai/api/*",
     "https://generativelanguage.googleapis.com/*"
   ],
   "optional_host_permissions": [

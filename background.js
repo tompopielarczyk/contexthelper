@@ -5,7 +5,8 @@ import { sendWebhook, buildWebhookPayload } from './lib/webhook.js';
 const MENU_PARENT_ID = 'contexthelper-parent';
 
 let _requestId = 0;
-let _currentAbortController = null;
+let _menuRebuildQueue = Promise.resolve();
+const _abortControllersByTab = new Map();
 
 // Must register listener synchronously — survives service worker restarts
 chrome.contextMenus.onClicked.addListener(handleMenuClick);
@@ -28,6 +29,11 @@ onSettingsChanged(() => {
 });
 
 async function rebuildContextMenu() {
+  _menuRebuildQueue = _menuRebuildQueue.catch(() => {}).then(rebuildContextMenuNow);
+  return _menuRebuildQueue;
+}
+
+async function rebuildContextMenuNow() {
   await chrome.contextMenus.removeAll();
 
   const { actions } = await getSettings();
@@ -41,7 +47,7 @@ async function rebuildContextMenu() {
 
   actions.forEach((action, index) => {
     chrome.contextMenus.create({
-      id: `action-${index}`,
+      id: getMenuId(action, index),
       parentId: MENU_PARENT_ID,
       title: action.name,
       contexts: ['selection']
@@ -49,10 +55,20 @@ async function rebuildContextMenu() {
   });
 }
 
+function getMenuId(action, index) {
+  return `action-${action.id || `legacy-action-${index}`}`;
+}
+
+function resolveActionByMenuId(actions, menuItemId) {
+  const match = String(menuItemId).match(/^action-(.+)$/);
+  if (!match) return null;
+  return actions.find((action, index) => (action.id || `legacy-action-${index}`) === match[1]) || null;
+}
+
 function resolveModelConfig(configs, configId) {
   if (!configs?.length) return null;
   if (configId) {
-    return configs.find(c => c.id === configId) || configs[0];
+    return configs.find(c => c.id === configId) || null;
   }
   return configs[0];
 }
@@ -88,35 +104,38 @@ function dispatchWebhook({ webhook, action, result, sourceText, modelUsed, tab, 
 }
 
 async function handleMenuClick(info, tab) {
-  const match = info.menuItemId.match(/^action-(\d+)$/);
-  if (!match) return;
+  if (!tab?.id) return;
 
-  const requestId = ++_requestId;
-
-  if (_currentAbortController) _currentAbortController.abort();
-  _currentAbortController = new AbortController();
-  const signal = _currentAbortController.signal;
-
-  const actionIndex = parseInt(match[1], 10);
   const settings = await getSettings();
-  const action = settings.actions[actionIndex];
+  const action = resolveActionByMenuId(settings.actions, info.menuItemId);
   if (!action) return;
 
   const selectedText = info.selectionText;
   if (!selectedText?.trim()) return;
 
-  await ensureContentScript(tab.id);
+  const requestId = ++_requestId;
+  const previousController = _abortControllersByTab.get(tab.id);
+  if (previousController) previousController.abort();
 
-  // Notify content script: show loading indicator
-  await sendToTab(tab.id, {
-    type: 'AI_PROCESSING_START',
-    requestId,
-    tooltipSettings: settings.tooltipSettings
-  });
+  const controller = new AbortController();
+  _abortControllersByTab.set(tab.id, controller);
+  const signal = controller.signal;
 
   const prompt = action.template.replaceAll('{{text}}', selectedText);
+  let canReportToTab = false;
 
   try {
+    const contentReady = await ensureContentScript(tab.id);
+    if (!contentReady) return;
+
+    // Notify content script: show loading indicator before spending tokens.
+    canReportToTab = await sendToTab(tab.id, {
+      type: 'AI_PROCESSING_START',
+      requestId,
+      tooltipSettings: settings.tooltipSettings
+    });
+    if (!canReportToTab) return;
+
     const config = resolveModelConfig(settings.modelConfigs, action.modelConfigId);
     if (!config) {
       throw new Error('No model configured. Please add a model in the extension settings.');
@@ -161,6 +180,7 @@ async function handleMenuClick(info, tab) {
     }
   } catch (err) {
     if (signal.aborted) return;
+    if (!canReportToTab) return;
     await sendToTab(tab.id, {
       type: 'AI_ERROR',
       requestId,
@@ -168,8 +188,8 @@ async function handleMenuClick(info, tab) {
       tooltipSettings: settings.tooltipSettings
     });
   } finally {
-    if (_currentAbortController?.signal === signal) {
-      _currentAbortController = null;
+    if (_abortControllersByTab.get(tab.id)?.signal === signal) {
+      _abortControllersByTab.delete(tab.id);
     }
   }
 }
@@ -180,9 +200,9 @@ async function ensureContentScript(tabId) {
       target: { tabId },
       func: () => !!window.__contexthelper_loaded
     });
-    if (results[0]?.result) return;
+    if (results[0]?.result) return true;
   } catch {
-    return;
+    return false;
   }
 
   try {
@@ -194,15 +214,19 @@ async function ensureContentScript(tabId) {
       target: { tabId },
       files: ['content.js']
     });
+    return true;
   } catch {
     // Restricted page (chrome://, about:, etc.)
+    return false;
   }
 }
 
 async function sendToTab(tabId, message) {
   try {
     await chrome.tabs.sendMessage(tabId, message);
+    return true;
   } catch {
     // Content script not loaded — can happen on restricted pages (chrome://, etc.)
+    return false;
   }
 }

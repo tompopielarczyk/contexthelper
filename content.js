@@ -8,6 +8,7 @@
   let lastSelectionRect = null;
   let activeCleanups = [];
   let activeRequestId = 0;
+  let activeSelectionSnapshot = null;
 
   function isTextControl(el) {
     if (!el) return false;
@@ -61,6 +62,7 @@
     switch (message.type) {
       case 'AI_PROCESSING_START':
         if (message.requestId !== undefined) activeRequestId = message.requestId;
+        activeSelectionSnapshot = captureInsertionSnapshot();
         showLoading(ts);
         break;
       case 'AI_RESULT':
@@ -70,12 +72,13 @@
         if (mode === 'tooltip') {
           showResultTooltip(message.text, ts);
         } else if (mode === 'insert') {
-          const replaced = replaceSelectedText(message.text) || forceReplaceInDOM(message.text);
+          const replaced = replaceSelectedText(message.text, activeSelectionSnapshot) || forceReplaceInDOM(message.text, activeSelectionSnapshot);
           if (!replaced) showResultTooltip(message.text, ts);
         } else {
-          const replaced = message.editable ? replaceSelectedText(message.text) : false;
+          const replaced = message.editable ? replaceSelectedText(message.text, activeSelectionSnapshot) : false;
           if (!replaced) showResultTooltip(message.text, ts);
         }
+        activeSelectionSnapshot = null;
         break;
       case 'AI_ERROR':
         if (message.requestId !== activeRequestId) return;
@@ -90,12 +93,13 @@
   });
 
   function ensureShadowHost() {
-    if (overlayHost && document.body.contains(overlayHost)) return;
+    const root = document.body || document.documentElement;
+    if (overlayHost && root.contains(overlayHost)) return;
 
     overlayHost = document.createElement('div');
     overlayHost.id = 'contexthelper-overlay-host';
     overlayHost.style.cssText = 'all:initial;position:fixed;z-index:2147483647;top:0;left:0;pointer-events:none;';
-    document.body.appendChild(overlayHost);
+    root.appendChild(overlayHost);
     shadowRoot = overlayHost.attachShadow({ mode: 'closed' });
 
     const style = document.createElement('style');
@@ -105,12 +109,24 @@
 
   function hideOverlay() {
     // Clean up event listeners from previous overlay
-    for (const cleanup of activeCleanups) cleanup();
+    for (const cleanup of activeCleanups) {
+      try { cleanup(); } catch { /* keep cleaning up the rest */ }
+    }
     activeCleanups = [];
 
     if (!shadowRoot) return;
     const existing = shadowRoot.querySelector('.cmn-overlay');
     if (existing) existing.remove();
+  }
+
+  function getViewport() {
+    const vv = window.visualViewport;
+    return {
+      top: vv?.offsetTop || 0,
+      left: vv?.offsetLeft || 0,
+      width: vv?.width || window.innerWidth,
+      height: vv?.height || window.innerHeight
+    };
   }
 
   function getPosition(preferredPosition) {
@@ -120,6 +136,7 @@
     }
 
     const margin = 8;
+    const viewport = getViewport();
     const tooltipMaxWidth = 420;
     const tooltipEstimatedHeight = 200;
     const pos = preferredPosition || 'below';
@@ -139,35 +156,40 @@
       // 'below' (default)
       top = rect.bottom + margin;
       // Flip above if not enough space below
-      if (rect.bottom + tooltipEstimatedHeight > window.innerHeight) {
+      if (rect.bottom + tooltipEstimatedHeight > viewport.top + viewport.height) {
         top = rect.top - margin - tooltipEstimatedHeight;
       }
       left = rect.left;
     }
 
     // Clamp to viewport
-    const maxTop = Math.max(margin, window.innerHeight - tooltipEstimatedHeight - margin);
-    top = Math.min(Math.max(top, margin), maxTop);
-    const maxLeft = Math.max(margin, window.innerWidth - tooltipMaxWidth - margin);
-    left = Math.min(Math.max(left, margin), maxLeft);
+    const minTop = viewport.top + margin;
+    const minLeft = viewport.left + margin;
+    const maxTop = Math.max(minTop, viewport.top + viewport.height - tooltipEstimatedHeight - margin);
+    top = Math.min(Math.max(top, minTop), maxTop);
+    const maxLeft = Math.max(minLeft, viewport.left + viewport.width - tooltipMaxWidth - margin);
+    left = Math.min(Math.max(left, minLeft), maxLeft);
 
     return { top, left };
   }
 
   function appendAndClampOverlay(el, pos) {
     const margin = 8;
+    const viewport = getViewport();
     el.style.top = `${pos.top}px`;
     el.style.left = `${pos.left}px`;
     shadowRoot.appendChild(el);
 
     // Use real rendered size instead of rough estimate to keep overlay on screen.
     const rect = el.getBoundingClientRect();
-    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
-    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const minTop = viewport.top + margin;
+    const minLeft = viewport.left + margin;
+    const maxTop = Math.max(minTop, viewport.top + viewport.height - rect.height - margin);
+    const maxLeft = Math.max(minLeft, viewport.left + viewport.width - rect.width - margin);
     const currentTop = Number.parseFloat(el.style.top) || margin;
     const currentLeft = Number.parseFloat(el.style.left) || margin;
-    const clampedTop = Math.min(Math.max(currentTop, margin), maxTop);
-    const clampedLeft = Math.min(Math.max(currentLeft, margin), maxLeft);
+    const clampedTop = Math.min(Math.max(currentTop, minTop), maxTop);
+    const clampedLeft = Math.min(Math.max(currentLeft, minLeft), maxLeft);
 
     if (clampedTop !== currentTop || clampedLeft !== currentLeft) {
       el.style.top = `${clampedTop}px`;
@@ -177,14 +199,16 @@
 
   function applyTooltipStyles(el, ts) {
     if (!ts) return;
-    if (ts.bgColor && ts.bgColor !== '#ffffff') {
+    const validColor = (value) => /^#[0-9a-fA-F]{6}$/.test(value || '');
+    if (validColor(ts.bgColor) && ts.bgColor !== '#ffffff') {
       el.style.background = ts.bgColor;
     }
-    if (ts.fontColor && ts.fontColor !== '#1f2937') {
+    if (validColor(ts.fontColor) && ts.fontColor !== '#1f2937') {
       el.style.color = ts.fontColor;
     }
-    if (ts.fontSize && ts.fontSize !== 14) {
-      el.style.fontSize = `${ts.fontSize}px`;
+    const fontSize = Number.parseInt(ts.fontSize, 10);
+    if (Number.isFinite(fontSize) && fontSize !== 14) {
+      el.style.fontSize = `${Math.min(Math.max(fontSize, 10), 24)}px`;
     }
   }
 
@@ -239,7 +263,10 @@
       } catch {
         copyBtn.textContent = 'Error!';
       }
-      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+      const resetTimer = setTimeout(() => {
+        if (copyBtn.isConnected) copyBtn.textContent = 'Copy';
+      }, 1500);
+      activeCleanups.push(() => clearTimeout(resetTimer));
     });
 
     actions.appendChild(copyBtn);
@@ -326,13 +353,84 @@
     return false;
   }
 
-  function replaceSelectedText(newText) {
+  function getEditableAncestor(node) {
+    let el = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    while (el) {
+      if (el.isContentEditable) return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  function captureInsertionSnapshot() {
     const activeEl = document.activeElement;
 
-    // textarea / input (only writable controls)
     if (isWritableTextControl(activeEl)) {
       const start = activeEl.selectionStart;
       const end = activeEl.selectionEnd;
+      if (start != null && end != null && end > start) {
+        return {
+          kind: 'text-control',
+          element: activeEl,
+          start,
+          end,
+          text: activeEl.value.substring(start, end)
+        };
+      }
+    }
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+
+    const range = sel.getRangeAt(0).cloneRange();
+    const text = sel.toString();
+    const editableRoot = getEditableAncestor(range.commonAncestorContainer);
+    return {
+      kind: editableRoot ? 'contenteditable' : 'dom',
+      range,
+      editableRoot,
+      text
+    };
+  }
+
+  function snapshotStillSelected(snapshot) {
+    if (!snapshot) return false;
+
+    if (snapshot.kind === 'text-control') {
+      const el = snapshot.element;
+      return document.activeElement === el
+        && el.isConnected
+        && el.selectionStart === snapshot.start
+        && el.selectionEnd === snapshot.end
+        && el.value.substring(snapshot.start, snapshot.end) === snapshot.text;
+    }
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed || sel.toString() !== snapshot.text) return false;
+    const range = sel.getRangeAt(0);
+    try {
+      const sameRange = range.compareBoundaryPoints(Range.START_TO_START, snapshot.range) === 0
+        && range.compareBoundaryPoints(Range.END_TO_END, snapshot.range) === 0;
+      if (!sameRange) return false;
+    } catch {
+      return false;
+    }
+
+    if (snapshot.kind === 'contenteditable') {
+      return getEditableAncestor(range.commonAncestorContainer) === snapshot.editableRoot;
+    }
+
+    return true;
+  }
+
+  function replaceSelectedText(newText, snapshot) {
+    if (!snapshotStillSelected(snapshot)) return false;
+    const activeEl = document.activeElement;
+
+    // textarea / input (only writable controls)
+    if (snapshot.kind === 'text-control' && isWritableTextControl(activeEl)) {
+      const start = snapshot.start;
+      const end = snapshot.end;
       if (start == null || end == null) return false;
       // Replace only an explicit selection; avoid writing into unrelated focused inputs.
       if (end <= start) return false;
@@ -354,7 +452,7 @@
     }
 
     // contenteditable — execCommand preserves undo stack
-    if (activeEl?.isContentEditable) {
+    if (snapshot.kind === 'contenteditable') {
       const sel = window.getSelection();
       if (sel && sel.rangeCount > 0) {
         if (sel.isCollapsed) return false;
@@ -376,12 +474,16 @@
   }
 
   // Replace selected text directly in the DOM (works on readonly page content)
-  function forceReplaceInDOM(newText) {
+  function forceReplaceInDOM(newText, snapshot) {
+    if (snapshot?.kind !== 'dom' || !snapshotStillSelected(snapshot)) return false;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
 
     try {
       const range = sel.getRangeAt(0);
+      if (range.startContainer !== range.endContainer || range.startContainer.nodeType !== Node.TEXT_NODE) {
+        return false;
+      }
       range.deleteContents();
       range.insertNode(document.createTextNode(newText));
       sel.collapseToEnd();
@@ -559,11 +661,13 @@
       }
 
       .cmn-tooltip {
+        box-sizing: border-box;
         background: #fff;
         border: 1px solid #e5e7eb;
         border-radius: 10px;
         padding: 14px;
-        max-width: 420px;
+        max-width: min(420px, calc(100vw - 16px));
+        max-height: calc(100vh - 16px);
         min-width: 200px;
         box-shadow: 0 4px 16px rgba(0,0,0,0.18);
       }
@@ -579,7 +683,7 @@
       }
 
       .cmn-content {
-        max-height: 300px;
+        max-height: min(300px, calc(100vh - 120px));
         overflow-y: auto;
         white-space: normal;
         word-break: break-word;
