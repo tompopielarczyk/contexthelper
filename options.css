@@ -14,6 +14,7 @@
   --orange-300: #fdba74;
   --orange-400: #fb923c;
   --orange-500: #f97316;
+  --orange-500-rgb: 249, 115, 22;
   --orange-600: #ea580c;
   --orange-700: #c2410c;
 
@@ -81,18 +82,13 @@ body {
   width: 76px;
   height: 76px;
   background: transparent;
-  color: var(--orange-600);
-  font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  letter-spacing: -0.02em;
 }
 
-.logo-mark svg {
+.logo-mark img {
   width: 76px;
   height: 76px;
 }
@@ -179,7 +175,7 @@ body {
 
 .input:focus {
   border-color: var(--orange-400);
-  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.12);
+  box-shadow: 0 0 0 3px rgba(var(--orange-500-rgb), 0.12);
 }
 
 .input::placeholder {
@@ -734,7 +730,7 @@ body.dark .input::placeholder {
 
 body.dark .input:focus {
   border-color: var(--orange-400);
-  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.2);
+  box-shadow: 0 0 0 3px rgba(var(--orange-500-rgb), 0.2);
 }
 
 body.dark .input-select {
@@ -783,7 +779,7 @@ body.dark .btn-dashed {
 
 body.dark .btn-dashed:hover {
   border-color: var(--orange-400);
-  background: rgba(249, 115, 22, 0.1);
+  background: rgba(var(--orange-500-rgb), 0.1);
 }
 
 body.dark .btn-icon:hover {
