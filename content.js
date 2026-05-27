@@ -651,7 +651,7 @@
         width: 16px;
         height: 16px;
         border: 2px solid #e5e7eb;
-        border-top-color: #6366f1;
+        border-top-color: #f97316;
         border-radius: 50%;
         animation: cmn-spin 0.6s linear infinite;
       }
@@ -770,12 +770,12 @@
       }
 
       .cmn-btn-primary {
-        background: #6366f1;
+        background: #f97316;
         color: #fff;
       }
 
       .cmn-btn-primary:hover {
-        background: #4f46e5;
+        background: #ea580c;
       }
 
       .cmn-btn-close {

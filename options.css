@@ -8,13 +8,14 @@
 }
 
 :root {
-  --indigo-50: #eef2ff;
-  --indigo-100: #e0e7ff;
-  --indigo-200: #c7d2fe;
-  --indigo-400: #818cf8;
-  --indigo-500: #6366f1;
-  --indigo-600: #4f46e5;
-  --indigo-700: #4338ca;
+  --orange-50: #fff7ed;
+  --orange-100: #ffedd5;
+  --orange-200: #fed7aa;
+  --orange-300: #fdba74;
+  --orange-400: #fb923c;
+  --orange-500: #f97316;
+  --orange-600: #ea580c;
+  --orange-700: #c2410c;
 
   --gray-50: #f9fafb;
   --gray-100: #f3f4f6;
@@ -64,32 +65,36 @@ body {
 .header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 36px;
-  padding-bottom: 24px;
+  gap: 16px;
+  margin-bottom: 40px;
+  padding-bottom: 28px;
   border-bottom: 1px solid var(--gray-200);
 }
 
 .header-brand {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 18px;
 }
 
 .logo-mark {
-  width: 42px;
-  height: 42px;
-  background: var(--indigo-500);
-  color: #fff;
+  width: 76px;
+  height: 76px;
+  background: transparent;
+  color: var(--orange-600);
   font-family: var(--font-mono);
   font-weight: 500;
   font-size: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius);
   flex-shrink: 0;
   letter-spacing: -0.02em;
+}
+
+.logo-mark svg {
+  width: 76px;
+  height: 76px;
 }
 
 .brand-name {
@@ -173,7 +178,7 @@ body {
 }
 
 .input:focus {
-  border-color: var(--indigo-400);
+  border-color: var(--orange-400);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
 }
 
@@ -243,12 +248,12 @@ body {
 }
 
 .btn:focus-visible {
-  outline: 2px solid var(--indigo-400);
+  outline: 2px solid var(--orange-400);
   outline-offset: 2px;
 }
 
 .btn-primary {
-  background: var(--indigo-500);
+  background: var(--orange-500);
   color: #fff;
   padding: 11px 28px;
   font-size: 14px;
@@ -257,12 +262,12 @@ body {
 }
 
 .btn-primary:hover {
-  background: var(--indigo-600);
+  background: var(--orange-600);
   box-shadow: var(--shadow-md);
 }
 
 .btn-primary:active {
-  background: var(--indigo-700);
+  background: var(--orange-700);
   transform: translateY(1px);
 }
 
@@ -301,9 +306,9 @@ body {
 }
 
 .btn-dashed:hover {
-  border-color: var(--indigo-300);
-  color: var(--indigo-500);
-  background: var(--indigo-50);
+  border-color: var(--orange-300);
+  color: var(--orange-600);
+  background: var(--orange-50);
 }
 
 .btn-icon {
@@ -454,8 +459,8 @@ body {
 }
 
 .action-card.drag-over {
-  border-color: var(--indigo-400);
-  background: var(--indigo-50);
+  border-color: var(--orange-400);
+  background: var(--orange-50);
 }
 
 .action-drag-handle {
@@ -502,7 +507,7 @@ body {
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 11px;
-  color: var(--indigo-600);
+  color: var(--orange-600);
 }
 
 .action-delete {
@@ -632,7 +637,7 @@ body {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--indigo-500);
+  background: var(--orange-500);
   cursor: pointer;
   border: 2px solid #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,0.2);
@@ -642,7 +647,7 @@ body {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--indigo-500);
+  background: var(--orange-500);
   cursor: pointer;
   border: 2px solid #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,0.2);
@@ -728,7 +733,7 @@ body.dark .input::placeholder {
 }
 
 body.dark .input:focus {
-  border-color: var(--indigo-400);
+  border-color: var(--orange-400);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
 }
 
@@ -758,10 +763,6 @@ body.dark .footer {
   border-top-color: var(--gray-200);
 }
 
-body.dark .logo-mark {
-  background: var(--indigo-400);
-}
-
 body.dark .btn-secondary {
   background: var(--gray-100);
   color: var(--gray-700);
@@ -781,7 +782,7 @@ body.dark .btn-dashed {
 }
 
 body.dark .btn-dashed:hover {
-  border-color: var(--indigo-400);
+  border-color: var(--orange-400);
   background: rgba(99, 102, 241, 0.1);
 }
 
@@ -839,12 +840,12 @@ body.dark .dark-mode-toggle svg {
 }
 
 .tab-btn.active {
-  color: var(--indigo-600);
-  border-bottom-color: var(--indigo-500);
+  color: var(--orange-600);
+  border-bottom-color: var(--orange-500);
 }
 
 .tab-btn:focus-visible {
-  outline: 2px solid var(--indigo-400);
+  outline: 2px solid var(--orange-400);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -858,8 +859,8 @@ body.dark .tab-nav {
 }
 
 body.dark .tab-btn.active {
-  color: var(--indigo-400);
-  border-bottom-color: var(--indigo-400);
+  color: var(--orange-400);
+  border-bottom-color: var(--orange-400);
 }
 
 /* ── Webhooks ──────────────────────────────────────── */
