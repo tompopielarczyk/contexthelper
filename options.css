@@ -179,7 +179,7 @@ body {
 
 .input:focus {
   border-color: var(--orange-400);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.12);
 }
 
 .input::placeholder {
@@ -734,7 +734,7 @@ body.dark .input::placeholder {
 
 body.dark .input:focus {
   border-color: var(--orange-400);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.2);
 }
 
 body.dark .input-select {
@@ -783,7 +783,7 @@ body.dark .btn-dashed {
 
 body.dark .btn-dashed:hover {
   border-color: var(--orange-400);
-  background: rgba(99, 102, 241, 0.1);
+  background: rgba(249, 115, 22, 0.1);
 }
 
 body.dark .btn-icon:hover {
