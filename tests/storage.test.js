@@ -17,8 +17,7 @@ function validSettings(overrides = {}) {
       name: 'Fix',
       template: 'Fix this:\n\n{{text}}',
       displayMode: 'auto',
-      modelConfigId: 'mc_1',
-      webhookId: ''
+      modelConfigId: 'mc_1'
     }],
     tooltipSettings: {
       bgColor: '#ffffff',
@@ -86,16 +85,31 @@ test('allows default actions without model config during initial setup', async (
   await assert.doesNotReject(() => saveSettings(settings));
 });
 
-test('rejects action references to missing model configs and webhooks', async () => {
+test('rejects action references to missing model configs', async () => {
   installChromeStorageMock();
   await assert.rejects(() => saveSettings(validSettings({
-    actions: [{ name: 'Fix', template: '{{text}}', displayMode: 'auto', modelConfigId: 'missing', webhookId: '' }]
+    actions: [{ name: 'Fix', template: '{{text}}', displayMode: 'auto', modelConfigId: 'missing' }]
   })), /unknown model/i);
+});
 
+test('rejects webhooks whose payload template is not valid JSON', async () => {
+  installChromeStorageMock();
   await assert.rejects(() => saveSettings(validSettings({
-    webhooks: [{ id: 'wh_1', name: 'Safe', url: 'https://api.example.com/hook', method: 'POST', headers: [] }],
-    actions: [{ name: 'Fix', template: '{{text}}', displayMode: 'auto', modelConfigId: 'mc_1', webhookId: 'missing' }]
-  })), /unknown webhook/i);
+    webhooks: [{ id: 'wh_1', name: 'Broken', url: 'https://api.example.com/hook', method: 'POST', headers: [], template: '{"text": {{result}}}' }]
+  })), /template/i);
+
+  await assert.doesNotReject(() => saveSettings(validSettings({
+    webhooks: [{ id: 'wh_1', name: 'Fine', url: 'https://api.example.com/hook', method: 'POST', headers: [], template: '{"text": "{{result}}"}' }]
+  })));
+});
+
+test('strips legacy webhookId from actions before writing to sync', async () => {
+  const calls = installChromeStorageMock();
+  await saveSettings(validSettings({
+    actions: [{ name: 'Fix', template: '{{text}}', displayMode: 'auto', modelConfigId: 'mc_1', webhookId: 'wh_stale' }]
+  }));
+
+  assert.equal('webhookId' in calls.sync[0].actions[0], false);
 });
 
 test('sanitizes tooltip settings before saving', async () => {
