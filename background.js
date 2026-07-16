@@ -1,6 +1,6 @@
 import { getSettings, onSettingsChanged, isFirstRun, markInitialized } from './lib/storage.js';
 import { callAI } from './lib/api-client.js';
-import { sendWebhook, buildWebhookPayload } from './lib/webhook.js';
+import { sendWebhook, renderTemplate } from './lib/webhook.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
 
@@ -11,6 +11,11 @@ const _abortControllersByTab = new Map();
 // Must register listeners synchronously — survives service worker restarts
 chrome.contextMenus.onClicked.addListener(handleMenuClick);
 chrome.commands.onCommand.addListener(handleCommand);
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type !== 'SEND_WEBHOOK') return;
+  handleSendWebhook(message).then(sendResponse);
+  return true; // keep the channel open for the async response
+});
 
 chrome.runtime.onInstalled.addListener(async () => {
   await rebuildContextMenu();
@@ -92,34 +97,23 @@ function resolveModelConfig(configs, configId) {
   return configs[0];
 }
 
-function resolveWebhook(webhooks, webhookId) {
-  if (!webhookId || !webhooks?.length) return null;
-  return webhooks.find(w => w.id === webhookId) || null;
-}
-
-function willShowTooltip(displayMode, editable) {
-  if (displayMode === 'tooltip') return true;
-  if (displayMode === 'insert') return false;
-  // 'auto' (default): tooltip iff context is read-only
-  return !editable;
-}
-
-function dispatchWebhook({ webhook, action, result, sourceText, modelUsed, tab, requestId }) {
-  const payload = buildWebhookPayload({
-    action,
-    result,
-    sourceText,
-    pageUrl: tab?.url || '',
-    pageTitle: tab?.title || '',
-    modelUsed
-  });
-  sendWebhook(webhook, payload).catch((err) => {
-    sendToTab(tab.id, {
-      type: 'WEBHOOK_FAILED',
-      requestId,
-      message: err?.message || 'Webhook delivery failed'
+// Manual delivery triggered by the send button in the result tooltip.
+async function handleSendWebhook({ webhookId, webhookData }) {
+  try {
+    const { webhooks } = await getSettings();
+    const webhook = webhooks.find(w => w.id === webhookId);
+    if (!webhook) {
+      throw new Error('Webhook not found — check the extension settings');
+    }
+    const payload = renderTemplate(webhook.template, {
+      ...webhookData,
+      timestamp: new Date().toISOString()
     });
-  });
+    await sendWebhook(webhook, payload);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || 'Webhook delivery failed' };
+  }
 }
 
 async function handleMenuClick(info, tab) {
@@ -233,21 +227,19 @@ async function runAction(action, { selectionText: selectedText, editable }, tab,
       text: result,
       editable,
       displayMode,
-      tooltipSettings: settings.tooltipSettings
-    });
-
-    const webhook = resolveWebhook(settings.webhooks, action.webhookId);
-    if (webhook && willShowTooltip(displayMode, editable)) {
-      dispatchWebhook({
-        webhook,
-        action,
+      tooltipSettings: settings.tooltipSettings,
+      // Send-button data: names only for the menu, payload fields for SEND_WEBHOOK
+      // (timestamp is stamped by the background at delivery time)
+      webhooks: (settings.webhooks || []).map(w => ({ id: w.id, name: w.name })),
+      webhookData: {
         result,
+        actionName: action.name,
         sourceText: selectedText,
-        modelUsed: isDeepL ? 'deepl' : (config.model || ''),
-        tab,
-        requestId
-      });
-    }
+        pageUrl: tab?.url || '',
+        pageTitle: tab?.title || '',
+        modelUsed: isDeepL ? 'deepl' : (config.model || '')
+      }
+    });
   } catch (err) {
     if (signal.aborted) return;
     if (!canReportToTab) return;
