@@ -1,5 +1,5 @@
 import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId } from './lib/storage.js';
-import { getAvailableModels, getDefaultModel, callAI } from './lib/api-client.js';
+import { getAvailableModels, getDefaultModel, callAI, getDeepLUsage, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
 import { testWebhook, requestWebhookPermission, originPatternForUrl } from './lib/webhook.js';
 
 // ── DOM refs ────────────────────────────────────────
@@ -119,7 +119,7 @@ async function init() {
   renderActions(settings.actions || getDefaultActions());
 
   addActionBtn.addEventListener('click', () => {
-    addActionCard({ name: '', template: '{{text}}', displayMode: 'auto', modelConfigId: '', webhookId: '' });
+    addActionCard({ name: '', template: '{{text}}', displayMode: 'auto', modelConfigId: '', webhookId: '', targetLang: '' });
   });
 
   // Restore defaults
@@ -227,8 +227,21 @@ function addModelConfigCard(config) {
 
   populateModelSelect(modelSelect, customModelInput, config.provider, config.model);
 
+  // DeepL has no model — hide the whole Model field
+  const modelField = modelSelect.closest('.field');
+  const syncProviderFields = () => {
+    const isDeepL = providerSelect.value === 'deepl';
+    modelField.hidden = isDeepL;
+    if (isDeepL) customModelInput.hidden = true;
+  };
+  syncProviderFields();
+
   providerSelect.addEventListener('change', () => {
-    populateModelSelect(modelSelect, customModelInput, providerSelect.value, '');
+    if (providerSelect.value !== 'deepl') {
+      populateModelSelect(modelSelect, customModelInput, providerSelect.value, '');
+    }
+    syncProviderFields();
+    refreshActionModelSelectors();
   });
 
   modelSelect.addEventListener('change', () => {
@@ -259,16 +272,22 @@ function addModelConfigCard(config) {
     testResult.hidden = true;
 
     try {
-      const model = modelSelect.value === CUSTOM_MODEL_VALUE
-        ? customModelInput.value.trim()
-        : modelSelect.value;
-      await callAI({
-        provider: providerSelect.value,
-        apiKey,
-        model,
-        prompt: 'Say OK'
-      });
-      showTestResultInCard(testResult, 'Connection OK', true);
+      if (providerSelect.value === 'deepl') {
+        const usage = await getDeepLUsage(apiKey);
+        const fmt = n => n.toLocaleString('pl-PL');
+        showTestResultInCard(testResult, `Connection OK — ${fmt(usage.characterCount)} / ${fmt(usage.characterLimit)} characters used`, true);
+      } else {
+        const model = modelSelect.value === CUSTOM_MODEL_VALUE
+          ? customModelInput.value.trim()
+          : modelSelect.value;
+        await callAI({
+          provider: providerSelect.value,
+          apiKey,
+          model,
+          prompt: 'Say OK'
+        });
+        showTestResultInCard(testResult, 'Connection OK', true);
+      }
     } catch (err) {
       showTestResultInCard(testResult, err.message, false);
     } finally {
@@ -500,16 +519,17 @@ function collectModelConfigs() {
   const cards = modelConfigsList.querySelectorAll('.model-config-card');
   const configs = [];
   for (const card of cards) {
+    const provider = card.querySelector('.model-config-provider').value;
     const modelSelect = card.querySelector('.model-config-model');
     const customModel = card.querySelector('.model-config-custom-model');
-    const model = modelSelect.value === CUSTOM_MODEL_VALUE
-      ? customModel.value.trim()
-      : modelSelect.value;
+    const model = provider === 'deepl'
+      ? ''
+      : (modelSelect.value === CUSTOM_MODEL_VALUE ? customModel.value.trim() : modelSelect.value);
 
     configs.push({
       id: card.dataset.configId,
       name: card.querySelector('.model-config-name').value.trim(),
-      provider: card.querySelector('.model-config-provider').value,
+      provider,
       model,
       apiKey: card.querySelector('.model-config-apikey').value.trim()
     });
@@ -529,17 +549,29 @@ function refreshActionModelSelectors() {
       opt.value = '';
       opt.textContent = '(no models configured)';
       select.appendChild(opt);
-      continue;
+    } else {
+      for (const config of configs) {
+        const opt = document.createElement('option');
+        opt.value = config.id;
+        opt.textContent = config.name || '(unnamed)';
+        if (config.id === currentValue) opt.selected = true;
+        select.appendChild(opt);
+      }
     }
 
-    for (const config of configs) {
-      const opt = document.createElement('option');
-      opt.value = config.id;
-      opt.textContent = config.name || '(unnamed)';
-      if (config.id === currentValue) opt.selected = true;
-      select.appendChild(opt);
-    }
+    syncActionCardMode(select.closest('.action-card'), configs);
   }
+}
+
+// DeepL-backed actions have no template — swap the textarea for a target-language select.
+// The textarea stays in the DOM (hidden) so its value survives switching configs.
+function syncActionCardMode(card, configs) {
+  const select = card.querySelector('.action-model-config');
+  const config = configs.find(c => c.id === select.value) || configs[0];
+  const isDeepL = config?.provider === 'deepl';
+  card.querySelector('.action-template').hidden = isDeepL;
+  card.querySelector('.action-hint').hidden = isDeepL;
+  card.querySelector('.action-target-lang').hidden = !isDeepL;
 }
 
 // ── Actions ─────────────────────────────────────────
@@ -557,6 +589,7 @@ function addActionCard(action) {
 
   const nameInput = card.querySelector('.action-name');
   const templateInput = card.querySelector('.action-template');
+  const targetLangSelect = card.querySelector('.action-target-lang');
   const displayModeSelect = card.querySelector('.action-display-mode');
   const modelConfigSelect = card.querySelector('.action-model-config');
   const webhookSelect = card.querySelector('.action-webhook');
@@ -565,6 +598,14 @@ function addActionCard(action) {
   nameInput.value = action.name;
   templateInput.value = action.template;
   displayModeSelect.value = action.displayMode || 'auto';
+
+  for (const lang of DEEPL_TARGET_LANGUAGES) {
+    const opt = document.createElement('option');
+    opt.value = lang.id;
+    opt.textContent = lang.name;
+    if (lang.id === action.targetLang) opt.selected = true;
+    targetLangSelect.appendChild(opt);
+  }
 
   // Populate model config selector
   const configs = collectModelConfigs();
@@ -582,6 +623,11 @@ function addActionCard(action) {
       modelConfigSelect.appendChild(opt);
     }
   }
+
+  syncActionCardMode(card, configs);
+  modelConfigSelect.addEventListener('change', () => {
+    syncActionCardMode(card, collectModelConfigs());
+  });
 
   // Populate webhook selector (always includes "no webhook")
   populateWebhookSelect(webhookSelect, collectWebhooks(), action.webhookId || '');
@@ -720,8 +766,9 @@ function collectActions() {
     const displayMode = card.querySelector('.action-display-mode').value;
     const modelConfigId = card.querySelector('.action-model-config').value;
     const webhookId = card.querySelector('.action-webhook')?.value || '';
+    const targetLang = card.querySelector('.action-target-lang').value;
     if (name) {
-      actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, webhookId });
+      actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, webhookId, targetLang });
     }
   }
   return actions;

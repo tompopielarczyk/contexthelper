@@ -193,6 +193,7 @@
               <option value="openai">OpenAI (GPT)</option>
               <option value="google">Google (Gemini)</option>
               <option value="openrouter">OpenRouter</option>
+              <option value="deepl">DeepL</option>
             </select>
           </div>
           <div class="field">
@@ -292,6 +293,7 @@
       <div class="action-fields">
         <input type="text" class="input action-name" placeholder="Action name" data-field="name">
         <textarea class="input action-template" placeholder="Template (use {{text}} as placeholder)" rows="3" data-field="template"></textarea>
+        <select class="input input-select action-target-lang" data-field="targetLang" title="Translation target language" hidden></select>
         <div class="action-meta-row">
           <span class="action-hint">Use <code>{{text}}</code> as placeholder for the selected text</span>
           <select class="input input-select action-model-config" data-field="modelConfigId" title="Model to use">
