@@ -287,6 +287,12 @@
       actions.appendChild(createWebhookSendControl(sendContext));
     }
     actions.appendChild(copyBtn);
+
+    // Visible grip over the native (barely visible) resize handle
+    const resizeGrip = document.createElement('div');
+    resizeGrip.className = 'cmn-resize-grip';
+    el.appendChild(resizeGrip);
+
     el.appendChild(closeBtn);
     el.appendChild(content);
     el.appendChild(actions);
@@ -783,6 +789,26 @@
         min-height: 120px;
         max-width: calc(100vw - 16px);
         max-height: calc(100vh - 16px);
+      }
+
+      /* Decorative grip on top of the native resize handle — currentColor
+         follows the configured font color, so it stays visible on dark and
+         light tooltip backgrounds. pointer-events: none keeps the native
+         handle underneath draggable. */
+      .cmn-resize-grip {
+        position: absolute;
+        right: 4px;
+        bottom: 4px;
+        width: 12px;
+        height: 12px;
+        pointer-events: none;
+        opacity: 0.45;
+        clip-path: polygon(100% 0, 100% 100%, 0 100%);
+        background: repeating-linear-gradient(135deg, currentColor 0 1.5px, transparent 1.5px 4.5px);
+      }
+
+      .cmn-resizable:hover .cmn-resize-grip {
+        opacity: 0.85;
       }
 
       .cmn-tooltip.cmn-error {
