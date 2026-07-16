@@ -665,7 +665,7 @@ body {
   gap: 8px;
 }
 
-/* Full row above the selects — four dropdowns leave no room beside it */
+/* Full row above the selects — the dropdowns leave no room beside it */
 .action-hint {
   flex-basis: 100%;
   font-size: 11px;
@@ -968,8 +968,27 @@ body.dark .webhook-card:hover {
   border-color: var(--gray-300);
 }
 
-/* Action webhook + shortcut dropdowns — mirror action-model-config */
-.action-webhook,
+.webhook-payload-template {
+  font-family: 'Consolas', 'Liberation Mono', monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.field-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--gray-400);
+}
+
+.field-hint code {
+  font-size: 10px;
+  background: var(--gray-100);
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+
+/* Action shortcut dropdown — mirrors action-model-config */
 .action-shortcut {
   width: auto;
   min-width: 120px;
@@ -1017,7 +1036,6 @@ body.dark .webhook-card:hover {
   .action-meta-row,
   .action-model-config,
   .action-display-mode,
-  .action-webhook,
   .action-shortcut {
     width: 100%;
     max-width: none;

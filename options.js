@@ -1,6 +1,6 @@
 import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId } from './lib/storage.js';
 import { getAvailableModels, getDefaultModel, callAI, getDeepLUsage, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
-import { testWebhook, requestWebhookPermission, originPatternForUrl } from './lib/webhook.js';
+import { testWebhook, requestWebhookPermission, requestWebhookPermissions, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 
 // ── DOM refs ────────────────────────────────────────
 const modelConfigsList = document.getElementById('modelConfigsList');
@@ -124,7 +124,8 @@ async function init() {
       name: '',
       url: '',
       method: 'POST',
-      headers: []
+      headers: [],
+      template: DEFAULT_WEBHOOK_TEMPLATE
     });
   });
 
@@ -132,7 +133,7 @@ async function init() {
   renderActions(settings.actions || getDefaultActions());
 
   addActionBtn.addEventListener('click', () => {
-    addActionCard({ name: '', template: '{{text}}', displayMode: 'auto', modelConfigId: '', webhookId: '', targetLang: '', shortcutSlot: '' });
+    addActionCard({ name: '', template: '{{text}}', displayMode: 'auto', modelConfigId: '', targetLang: '', shortcutSlot: '' });
   });
 
   // chrome:// URLs are blocked as plain anchors — open via tabs API
@@ -379,6 +380,7 @@ function addWebhookCard(webhook) {
   const urlInput = card.querySelector('.webhook-url');
   const headersList = card.querySelector('.webhook-headers-list');
   const addHeaderBtn = card.querySelector('.webhook-add-header');
+  const payloadTemplateInput = card.querySelector('.webhook-payload-template');
   const testBtn = card.querySelector('.webhook-test');
   const testResult = card.querySelector('.webhook-test-result');
   const deleteBtn = card.querySelector('.webhook-delete');
@@ -386,6 +388,7 @@ function addWebhookCard(webhook) {
   nameInput.value = webhook.name || '';
   methodSelect.value = webhook.method || 'POST';
   urlInput.value = webhook.url || '';
+  payloadTemplateInput.value = webhook.template || DEFAULT_WEBHOOK_TEMPLATE;
 
   for (const header of webhook.headers || []) {
     addWebhookHeaderRow(headersList, header);
@@ -395,8 +398,6 @@ function addWebhookCard(webhook) {
     addWebhookHeaderRow(headersList, { key: '', value: '' });
   });
 
-  nameInput.addEventListener('input', () => refreshActionWebhookSelectors());
-
   testBtn.addEventListener('click', async () => {
     await runWebhookTest(card, testBtn, testResult);
   });
@@ -405,15 +406,11 @@ function addWebhookCard(webhook) {
     if (nameInput.value.trim() === '' || confirm('Delete this webhook?')) {
       card.style.opacity = '0';
       card.style.transform = 'translateY(-4px)';
-      setTimeout(() => {
-        card.remove();
-        refreshActionWebhookSelectors();
-      }, 150);
+      setTimeout(() => card.remove(), 150);
     }
   });
 
   webhooksList.appendChild(card);
-  refreshActionWebhookSelectors();
 }
 
 function addWebhookHeaderRow(container, header) {
@@ -437,7 +434,8 @@ function collectWebhookFromCard(card) {
     name: card.querySelector('.webhook-name').value.trim(),
     url: card.querySelector('.webhook-url').value.trim(),
     method: card.querySelector('.webhook-method').value,
-    headers
+    headers,
+    template: card.querySelector('.webhook-payload-template').value.trim() || DEFAULT_WEBHOOK_TEMPLATE
   };
 }
 
@@ -504,32 +502,6 @@ function showTestResult(el, message, success) {
 
 function truncate(s, n) {
   return s.length > n ? s.slice(0, n) + '…' : s;
-}
-
-function refreshActionWebhookSelectors() {
-  const webhooks = collectWebhooks();
-  const selectors = actionsList?.querySelectorAll('.action-webhook') || [];
-  for (const select of selectors) {
-    const currentValue = select.value;
-    populateWebhookSelect(select, webhooks, currentValue);
-  }
-}
-
-function populateWebhookSelect(select, webhooks, selectedId) {
-  select.textContent = '';
-  const noneOpt = document.createElement('option');
-  noneOpt.value = '';
-  noneOpt.textContent = '(no webhook)';
-  if (!selectedId) noneOpt.selected = true;
-  select.appendChild(noneOpt);
-
-  for (const wh of webhooks) {
-    const opt = document.createElement('option');
-    opt.value = wh.id;
-    opt.textContent = wh.name || '(unnamed)';
-    if (wh.id === selectedId) opt.selected = true;
-    select.appendChild(opt);
-  }
 }
 
 // ── Action Model Selectors Sync ────────────────────
@@ -615,7 +587,6 @@ function addActionCard(action) {
   const targetLangSelect = card.querySelector('.action-target-lang');
   const displayModeSelect = card.querySelector('.action-display-mode');
   const modelConfigSelect = card.querySelector('.action-model-config');
-  const webhookSelect = card.querySelector('.action-webhook');
   const shortcutSelect = card.querySelector('.action-shortcut');
   const deleteBtn = card.querySelector('.action-delete');
 
@@ -673,20 +644,6 @@ function addActionCard(action) {
   modelConfigSelect.addEventListener('change', () => {
     syncActionCardMode(card, collectModelConfigs());
   });
-
-  // Populate webhook selector (always includes "no webhook")
-  populateWebhookSelect(webhookSelect, collectWebhooks(), action.webhookId || '');
-
-  // Webhook only fires for tooltip path — disable dropdown when displayMode is 'insert'
-  const syncWebhookEnabled = () => {
-    const insertOnly = displayModeSelect.value === 'insert';
-    webhookSelect.disabled = insertOnly;
-    webhookSelect.title = insertOnly
-      ? 'Webhooks only fire when result shows in a tooltip (not in insert mode)'
-      : 'POST result to webhook (tooltip mode only)';
-  };
-  syncWebhookEnabled();
-  displayModeSelect.addEventListener('change', syncWebhookEnabled);
 
   deleteBtn.addEventListener('click', () => {
     if (card.querySelector('.action-name').value.trim() === '' || confirm('Delete this action?')) {
@@ -787,6 +744,10 @@ async function onSave() {
   const systemPrompt = systemPromptInput.value;
   const darkMode = darkModeState;
 
+  // Grant webhook origins while we still have the click gesture (before any
+  // await) — otherwise the first tooltip send would fail with a network error.
+  const permissionsPromise = requestWebhookPermissions(webhooks.map(w => w.url).filter(Boolean));
+
   const tooltipSettings = {
     bgColor: tooltipBgColor.value,
     fontColor: tooltipFontColor.value,
@@ -796,8 +757,10 @@ async function onSave() {
 
   try {
     await saveSettings({ modelConfigs, webhooks, actions, tooltipSettings, systemPrompt, darkMode });
-    showSaveStatus('Saved', true);
+    const granted = await permissionsPromise;
+    showSaveStatus(granted ? 'Saved' : 'Saved — webhook origin permission not granted, sending will fail', granted);
   } catch (err) {
+    await permissionsPromise.catch(() => {});
     showSaveStatus(err.message, false);
   }
 }
@@ -810,11 +773,10 @@ function collectActions() {
     const template = card.querySelector('.action-template').value;
     const displayMode = card.querySelector('.action-display-mode').value;
     const modelConfigId = card.querySelector('.action-model-config').value;
-    const webhookId = card.querySelector('.action-webhook')?.value || '';
     const targetLang = card.querySelector('.action-target-lang').value;
     const shortcutSlot = card.querySelector('.action-shortcut')?.value || '';
     if (name) {
-      actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, webhookId, targetLang, shortcutSlot });
+      actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, targetLang, shortcutSlot });
     }
   }
   return actions;

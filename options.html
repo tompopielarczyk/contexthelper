@@ -260,6 +260,11 @@
           <div class="webhook-headers-list"></div>
           <button type="button" class="btn btn-ghost webhook-add-header">+ Add header</button>
         </div>
+        <div class="field">
+          <label class="field-label">Payload template (JSON)</label>
+          <textarea class="input webhook-payload-template" rows="6" spellcheck="false"></textarea>
+          <span class="field-hint">Placeholders (inside JSON strings): <code>{{result}}</code>, <code>{{sourceText}}</code>, <code>{{actionName}}</code>, <code>{{pageUrl}}</code>, <code>{{pageTitle}}</code>, <code>{{timestamp}}</code>, <code>{{modelUsed}}</code></span>
+        </div>
         <div class="field-row">
           <button type="button" class="btn btn-secondary webhook-test">
             <span class="btn-text">Test</span>
@@ -306,8 +311,6 @@
             <option value="auto">Auto</option>
             <option value="tooltip">Tooltip</option>
             <option value="insert">Insert text</option>
-          </select>
-          <select class="input input-select action-webhook" data-field="webhookId" title="POST result to webhook (tooltip mode only)">
           </select>
           <select class="input input-select action-shortcut" data-field="shortcutSlot" title="Keyboard shortcut">
           </select>
