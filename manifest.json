@@ -21,6 +21,24 @@
     "http://*/*",
     "https://*/*"
   ],
+  "commands": {
+    "run-action-1": {
+      "suggested_key": { "default": "Ctrl+Shift+1", "mac": "Command+Shift+1" },
+      "description": "Run action assigned to Shortcut 1"
+    },
+    "run-action-2": {
+      "suggested_key": { "default": "Ctrl+Shift+2", "mac": "Command+Shift+2" },
+      "description": "Run action assigned to Shortcut 2"
+    },
+    "run-action-3": {
+      "suggested_key": { "default": "Ctrl+Shift+3" },
+      "description": "Run action assigned to Shortcut 3"
+    },
+    "run-action-4": {
+      "suggested_key": { "default": "Ctrl+Shift+4" },
+      "description": "Run action assigned to Shortcut 4"
+    }
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
