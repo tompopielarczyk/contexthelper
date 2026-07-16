@@ -65,29 +65,29 @@
         activeSelectionSnapshot = captureInsertionSnapshot();
         showLoading(ts);
         break;
-      case 'AI_RESULT':
+      case 'AI_RESULT': {
         if (message.requestId !== activeRequestId) return;
         hideOverlay();
         const mode = message.displayMode || 'auto';
+        const sendContext = message.webhooks?.length && message.webhookData
+          ? { webhooks: message.webhooks, webhookData: message.webhookData }
+          : null;
         if (mode === 'tooltip') {
-          showResultTooltip(message.text, ts);
+          showResultTooltip(message.text, ts, sendContext);
         } else if (mode === 'insert') {
           const replaced = replaceSelectedText(message.text, activeSelectionSnapshot) || forceReplaceInDOM(message.text, activeSelectionSnapshot);
-          if (!replaced) showResultTooltip(message.text, ts);
+          if (!replaced) showResultTooltip(message.text, ts, sendContext);
         } else {
           const replaced = message.editable ? replaceSelectedText(message.text, activeSelectionSnapshot) : false;
-          if (!replaced) showResultTooltip(message.text, ts);
+          if (!replaced) showResultTooltip(message.text, ts, sendContext);
         }
         activeSelectionSnapshot = null;
         break;
+      }
       case 'AI_ERROR':
         if (message.requestId !== activeRequestId) return;
         hideOverlay();
         showErrorTooltip(message.message, ts);
-        break;
-      case 'WEBHOOK_FAILED':
-        if (message.requestId !== activeRequestId) return;
-        addWebhookFailBadge(message.message);
         break;
     }
   });
@@ -232,7 +232,7 @@
     appendAndClampOverlay(el, pos);
   }
 
-  function showResultTooltip(text, ts) {
+  function showResultTooltip(text, ts, sendContext) {
     ensureShadowHost();
     hideOverlay();
 
@@ -269,6 +269,9 @@
       activeCleanups.push(() => clearTimeout(resetTimer));
     });
 
+    if (sendContext) {
+      actions.appendChild(createWebhookSendControl(sendContext));
+    }
     actions.appendChild(copyBtn);
     el.appendChild(closeBtn);
     el.appendChild(content);
@@ -327,19 +330,65 @@
     activeCleanups.push(() => document.removeEventListener('keydown', escHandler));
   }
 
-  function addWebhookFailBadge(errorMessage) {
-    if (!shadowRoot) return;
-    const tooltip = shadowRoot.querySelector('.cmn-tooltip');
-    if (!tooltip) return;
-    // Don't duplicate
-    if (tooltip.querySelector('.cmn-webhook-fail')) return;
+  // Send button (single webhook) or "Send ▾" menu (multiple) in the result
+  // tooltip. Delivery goes through the background service worker (SEND_WEBHOOK),
+  // which holds the webhook URL/headers — the page only sees id + name.
+  function createWebhookSendControl({ webhooks, webhookData }) {
+    const wrap = document.createElement('div');
+    wrap.className = 'cmn-send-wrap';
 
-    const badge = document.createElement('div');
-    badge.className = 'cmn-webhook-fail';
-    badge.title = `Webhook failed: ${errorMessage || 'unknown error'}`;
-    badge.setAttribute('aria-label', badge.title);
-    badge.textContent = '⚠';
-    tooltip.appendChild(badge);
+    const btn = document.createElement('button');
+    btn.className = 'cmn-btn cmn-btn-send';
+    const multi = webhooks.length > 1;
+    const idleLabel = multi ? 'Send ▾' : `Send to ${webhooks[0].name}`;
+    btn.textContent = idleLabel;
+
+    async function deliver(webhookId) {
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      btn.title = '';
+      let response;
+      try {
+        response = await chrome.runtime.sendMessage({ type: 'SEND_WEBHOOK', webhookId, webhookData });
+      } catch {
+        response = { ok: false, error: 'Extension unavailable — try reloading the page' };
+      }
+      if (!btn.isConnected) return;
+      if (response?.ok) {
+        btn.textContent = multi ? '✓ Sent ▾' : '✓ Sent';
+        btn.disabled = !multi; // multi: keep enabled to send to another target
+      } else {
+        btn.disabled = false;
+        btn.textContent = multi ? '⚠ Failed ▾' : '⚠ Failed — retry';
+        btn.title = response?.error || 'Webhook delivery failed';
+      }
+    }
+
+    if (!multi) {
+      btn.addEventListener('click', () => deliver(webhooks[0].id));
+      wrap.appendChild(btn);
+      return wrap;
+    }
+
+    const menu = document.createElement('div');
+    menu.className = 'cmn-send-menu';
+    menu.hidden = true;
+    for (const webhook of webhooks) {
+      const item = document.createElement('button');
+      item.className = 'cmn-send-item';
+      item.textContent = webhook.name;
+      item.addEventListener('click', () => {
+        menu.hidden = true;
+        deliver(webhook.id);
+      });
+      menu.appendChild(item);
+    }
+    btn.addEventListener('click', () => {
+      menu.hidden = !menu.hidden;
+    });
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+    return wrap;
   }
 
   function isWritableTextControl(el) {
@@ -793,23 +842,53 @@
         color: #4b5563;
       }
 
-      .cmn-webhook-fail {
+      .cmn-send-wrap {
+        position: relative;
+      }
+
+      .cmn-btn-send {
+        background: #f3f4f6;
+        color: #374151;
+        border: 1px solid #e5e7eb;
+      }
+
+      .cmn-btn-send:hover:not(:disabled) {
+        background: #e5e7eb;
+      }
+
+      .cmn-btn-send:disabled {
+        cursor: default;
+        opacity: 0.7;
+      }
+
+      .cmn-send-menu {
         position: absolute;
-        bottom: 8px;
-        left: 10px;
-        font-size: 14px;
-        line-height: 1;
-        color: #b45309;
-        background: #fef3c7;
-        border: 1px solid #fde68a;
-        border-radius: 999px;
-        width: 20px;
-        height: 20px;
+        bottom: calc(100% + 4px);
+        right: 0;
         display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: help;
-        user-select: none;
+        flex-direction: column;
+        min-width: 140px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        overflow: hidden;
+      }
+
+      .cmn-send-item {
+        border: none;
+        background: transparent;
+        padding: 6px 12px;
+        text-align: left;
+        cursor: pointer;
+        font-size: 13px;
+        font-family: inherit;
+        color: #1f2937;
+        white-space: nowrap;
+      }
+
+      .cmn-send-item:hover {
+        background: #f3f4f6;
       }
     `;
   }
