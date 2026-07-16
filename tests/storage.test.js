@@ -127,8 +127,39 @@ test('sanitizes tooltip settings before saving', async () => {
     bgColor: '#ffffff',
     fontColor: '#1f2937',
     fontSize: 24,
-    position: 'below'
+    position: 'below',
+    width: null,
+    height: null
   });
+});
+
+test('clamps tooltip size and nulls invalid values', async () => {
+  const calls = installChromeStorageMock();
+  await saveSettings(validSettings({
+    tooltipSettings: {
+      bgColor: '#ffffff',
+      fontColor: '#1f2937',
+      fontSize: 14,
+      position: 'below',
+      width: 9999,
+      height: 'garbage'
+    }
+  }));
+  assert.equal(calls.sync[0].tooltipSettings.width, 1200);
+  assert.equal(calls.sync[0].tooltipSettings.height, null);
+
+  await saveSettings(validSettings({
+    tooltipSettings: {
+      bgColor: '#ffffff',
+      fontColor: '#1f2937',
+      fontSize: 14,
+      position: 'below',
+      width: 560,
+      height: 30
+    }
+  }));
+  assert.equal(calls.sync[1].tooltipSettings.width, 560);
+  assert.equal(calls.sync[1].tooltipSettings.height, 120);
 });
 
 test('fails before writing when sync payload exceeds per-item quota', async () => {
