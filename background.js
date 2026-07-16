@@ -110,9 +110,13 @@ async function handleMenuClick(info, tab) {
   const action = resolveActionByMenuId(settings.actions, info.menuItemId);
   if (!action) return;
 
-  const selectedText = info.selectionText;
-  if (!selectedText?.trim()) return;
+  if (!info.selectionText?.trim()) return;
 
+  await runAction(action, { selectionText: info.selectionText, editable: info.editable }, tab, settings);
+}
+
+// Shared AI flow — callers guarantee a non-empty selectionText
+async function runAction(action, { selectionText: selectedText, editable }, tab, settings) {
   const requestId = ++_requestId;
   const previousController = _abortControllersByTab.get(tab.id);
   if (previousController) previousController.abort();
@@ -168,13 +172,13 @@ async function handleMenuClick(info, tab) {
       type: 'AI_RESULT',
       requestId,
       text: result,
-      editable: info.editable,
+      editable,
       displayMode,
       tooltipSettings: settings.tooltipSettings
     });
 
     const webhook = resolveWebhook(settings.webhooks, action.webhookId);
-    if (webhook && willShowTooltip(displayMode, info.editable)) {
+    if (webhook && willShowTooltip(displayMode, editable)) {
       dispatchWebhook({
         webhook,
         action,
