@@ -121,7 +121,6 @@ async function handleMenuClick(info, tab) {
   _abortControllersByTab.set(tab.id, controller);
   const signal = controller.signal;
 
-  const prompt = action.template.replaceAll('{{text}}', selectedText);
   let canReportToTab = false;
 
   try {
@@ -144,12 +143,20 @@ async function handleMenuClick(info, tab) {
       throw new Error('Missing API key. Please configure the API key in settings.');
     }
 
+    // DeepL takes the raw selection (no prompt template, no system prompt)
+    const isDeepL = config.provider === 'deepl';
+    if (isDeepL && !action.targetLang) {
+      throw new Error('No target language set for this action. Please configure it in settings.');
+    }
+    const prompt = isDeepL ? selectedText : action.template.replaceAll('{{text}}', selectedText);
+
     const result = await callAI({
       provider: config.provider,
       apiKey: config.apiKey,
       model: config.model,
       prompt,
-      systemPrompt: settings.systemPrompt,
+      systemPrompt: isDeepL ? undefined : settings.systemPrompt,
+      targetLang: action.targetLang,
       signal
     });
 
@@ -173,7 +180,7 @@ async function handleMenuClick(info, tab) {
         action,
         result,
         sourceText: selectedText,
-        modelUsed: config.model || '',
+        modelUsed: isDeepL ? 'deepl' : (config.model || ''),
         tab,
         requestId
       });
