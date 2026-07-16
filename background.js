@@ -8,8 +8,9 @@ let _requestId = 0;
 let _menuRebuildQueue = Promise.resolve();
 const _abortControllersByTab = new Map();
 
-// Must register listener synchronously — survives service worker restarts
+// Must register listeners synchronously — survives service worker restarts
 chrome.contextMenus.onClicked.addListener(handleMenuClick);
+chrome.commands.onCommand.addListener(handleCommand);
 
 chrome.runtime.onInstalled.addListener(async () => {
   await rebuildContextMenu();
@@ -39,6 +40,8 @@ async function rebuildContextMenuNow() {
   const { actions } = await getSettings();
   if (!actions?.length) return;
 
+  const shortcutBySlot = await getShortcutsBySlot();
+
   chrome.contextMenus.create({
     id: MENU_PARENT_ID,
     title: 'ContextHelper',
@@ -46,13 +49,29 @@ async function rebuildContextMenuNow() {
   });
 
   actions.forEach((action, index) => {
+    const combo = action.shortcutSlot && shortcutBySlot.get(action.shortcutSlot);
     chrome.contextMenus.create({
       id: getMenuId(action, index),
       parentId: MENU_PARENT_ID,
-      title: action.name,
+      title: combo ? `${action.name} (${combo})` : action.name,
       contexts: ['selection']
     });
   });
+}
+
+const COMMAND_SLOT_RE = /^run-action-([1-4])$/;
+
+async function getShortcutsBySlot() {
+  const bySlot = new Map();
+  try {
+    for (const command of await chrome.commands.getAll()) {
+      const slot = COMMAND_SLOT_RE.exec(command.name)?.[1];
+      if (slot && command.shortcut) bySlot.set(slot, command.shortcut);
+    }
+  } catch {
+    // commands API unavailable — plain titles
+  }
+  return bySlot;
 }
 
 function getMenuId(action, index) {
@@ -113,6 +132,46 @@ async function handleMenuClick(info, tab) {
   if (!info.selectionText?.trim()) return;
 
   await runAction(action, { selectionText: info.selectionText, editable: info.editable }, tab, settings);
+}
+
+async function handleCommand(command, tab) {
+  const slot = COMMAND_SLOT_RE.exec(command)?.[1];
+  if (!slot) return;
+
+  if (!tab?.id) {
+    // onCommand passes tab since Chrome 117 — query is the fallback
+    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  }
+  if (!tab?.id) return;
+
+  const settings = await getSettings();
+  const action = (settings.actions || []).find(a => a.shortcutSlot === slot);
+  if (!action) return;
+
+  const selection = await getSelectionFromTab(tab.id);
+  if (!selection) return; // restricted page (chrome://, Web Store, ...)
+
+  if (!selection.text.trim()) {
+    // content.js gates AI_ERROR on the requestId set by AI_PROCESSING_START,
+    // so the error tooltip needs the full START + ERROR pair.
+    if (!await ensureContentScript(tab.id)) return;
+    const requestId = ++_requestId;
+    const ok = await sendToTab(tab.id, {
+      type: 'AI_PROCESSING_START',
+      requestId,
+      tooltipSettings: settings.tooltipSettings
+    });
+    if (!ok) return;
+    await sendToTab(tab.id, {
+      type: 'AI_ERROR',
+      requestId,
+      message: 'Select some text first',
+      tooltipSettings: settings.tooltipSettings
+    });
+    return;
+  }
+
+  await runAction(action, { selectionText: selection.text, editable: selection.editable }, tab, settings);
 }
 
 // Shared AI flow — callers guarantee a non-empty selectionText
@@ -202,6 +261,31 @@ async function runAction(action, { selectionText: selectedText, editable }, tab,
     if (_abortControllersByTab.get(tab.id)?.signal === signal) {
       _abortControllersByTab.delete(tab.id);
     }
+  }
+}
+
+async function getSelectionFromTab(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const el = document.activeElement;
+        const isTextControl = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
+        if (isTextControl && el.selectionStart != null && el.selectionEnd != null
+            && el.selectionEnd > el.selectionStart) {
+          return {
+            text: el.value.slice(el.selectionStart, el.selectionEnd),
+            editable: !el.readOnly && !el.disabled
+          };
+        }
+        const text = window.getSelection()?.toString() || '';
+        return { text, editable: !!(el && el.isContentEditable) };
+      }
+    });
+    return results?.[0]?.result ?? null;
+  } catch {
+    // Restricted page (chrome://, about:, etc.)
+    return null;
   }
 }
 
