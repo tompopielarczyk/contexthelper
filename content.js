@@ -129,7 +129,7 @@
     };
   }
 
-  function getPosition(preferredPosition) {
+  function getPosition(preferredPosition, estimatedSize) {
     const rect = lastSelectionRect;
     if (!rect || (rect.width === 0 && rect.height === 0)) {
       return { top: 100, left: 100 };
@@ -137,8 +137,8 @@
 
     const margin = 8;
     const viewport = getViewport();
-    const tooltipMaxWidth = 420;
-    const tooltipEstimatedHeight = 200;
+    const tooltipMaxWidth = estimatedSize?.width || 420;
+    const tooltipEstimatedHeight = estimatedSize?.height || 200;
     const pos = preferredPosition || 'below';
 
     let top, left;
@@ -232,13 +232,27 @@
     appendAndClampOverlay(el, pos);
   }
 
+  function tooltipDimension(value) {
+    const n = Number.parseInt(value, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
   function showResultTooltip(text, ts, sendContext) {
     ensureShadowHost();
     hideOverlay();
 
-    const pos = getPosition(ts?.position);
+    const storedWidth = tooltipDimension(ts?.width);
+    const storedHeight = tooltipDimension(ts?.height);
+    const width = storedWidth || 420;
+
+    const pos = getPosition(ts?.position, { width, height: storedHeight || 200 });
     const el = document.createElement('div');
-    el.className = 'cmn-overlay cmn-tooltip';
+    el.className = 'cmn-overlay cmn-tooltip cmn-resizable';
+    // Starting size; the CSS resize handle overrides via inline width/height.
+    // Default max-height keeps short results compact — cleared on first drag
+    // so the user can grow past it (CSS caps everything at the viewport).
+    el.style.width = `${width}px`;
+    el.style.maxHeight = storedHeight ? `${storedHeight}px` : '400px';
     applyTooltipStyles(el, ts);
 
     const closeBtn = document.createElement('button');
@@ -277,6 +291,7 @@
     el.appendChild(content);
     el.appendChild(actions);
     appendAndClampOverlay(el, pos);
+    observeTooltipResize(el);
 
     // Dismiss on Escape
     const escHandler = (e) => {
@@ -328,6 +343,43 @@
     };
     document.addEventListener('keydown', escHandler);
     activeCleanups.push(() => document.removeEventListener('keydown', escHandler));
+  }
+
+  // Persist the size after the user drags the native resize handle, so the
+  // next tooltip opens at the same size. The initial ResizeObserver callback
+  // (and programmatic sizing) is filtered out by comparing against the size
+  // at attach time.
+  function observeTooltipResize(el) {
+    if (typeof ResizeObserver !== 'function') return;
+    const initial = el.getBoundingClientRect();
+    let saveTimer = null;
+    const observer = new ResizeObserver(() => {
+      const rect = el.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      if (Math.abs(width - initial.width) < 2 && Math.abs(height - initial.height) < 2) return;
+      // User is dragging — release the default max-height cap so they can grow
+      // past it (the CSS viewport cap still applies).
+      el.style.maxHeight = '';
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => saveTooltipSize(width, height), 400);
+    });
+    observer.observe(el);
+    activeCleanups.push(() => {
+      observer.disconnect();
+      clearTimeout(saveTimer);
+    });
+  }
+
+  async function saveTooltipSize(width, height) {
+    try {
+      const data = await chrome.storage.sync.get({ tooltipSettings: {} });
+      await chrome.storage.sync.set({
+        tooltipSettings: { ...data.tooltipSettings, width, height }
+      });
+    } catch {
+      // Storage unavailable (extension reloaded mid-session) — size just won't persist
+    }
   }
 
   // Send button (single webhook) or "Send ▾" menu (multiple) in the result
@@ -711,14 +763,26 @@
 
       .cmn-tooltip {
         box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
         background: #fff;
         border: 1px solid #e5e7eb;
         border-radius: 10px;
         padding: 14px;
         max-width: min(420px, calc(100vw - 16px));
-        max-height: calc(100vh - 16px);
+        max-height: min(400px, calc(100vh - 16px));
         min-width: 200px;
         box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+      }
+
+      /* Result tooltip: native resize handle; size limited only by the viewport
+         (default size comes from inline styles set in showResultTooltip) */
+      .cmn-resizable {
+        resize: both;
+        overflow: hidden;
+        min-height: 120px;
+        max-width: calc(100vw - 16px);
+        max-height: calc(100vh - 16px);
       }
 
       .cmn-tooltip.cmn-error {
@@ -732,7 +796,8 @@
       }
 
       .cmn-content {
-        max-height: min(300px, calc(100vh - 120px));
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-y: auto;
         white-space: normal;
         word-break: break-word;
@@ -806,6 +871,7 @@
         display: flex;
         gap: 8px;
         justify-content: flex-end;
+        flex-shrink: 0;
       }
 
       .cmn-btn {
@@ -868,6 +934,8 @@
         display: flex;
         flex-direction: column;
         min-width: 140px;
+        max-height: 200px;
+        overflow-y: auto;
         background: #fff;
         border: 1px solid #e5e7eb;
         border-radius: 6px;
