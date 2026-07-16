@@ -27,8 +27,8 @@ Supported providers: Anthropic, OpenAI, Google Gemini, OpenRouter (includes open
 
 ### Data flow
 
-1. User selects text → right-clicks → picks action from "ContextHelper" submenu
-2. `background.js` (`handleMenuClick`) reads settings, sends `AI_PROCESSING_START` to content script, calls `lib/api-client.js`
+1. User selects text → right-clicks → picks action from "ContextHelper" submenu, **or** presses a keyboard shortcut (see Keyboard shortcuts below)
+2. `background.js` (`handleMenuClick` or `handleCommand`, both thin adapters over the shared `runAction`) reads settings, sends `AI_PROCESSING_START` to content script, calls `lib/api-client.js`
 3. Content script shows loading spinner (Shadow DOM overlay)
 4. Background receives AI response → sends `AI_RESULT` or `AI_ERROR` to content script
 5. Content script either replaces selected text or shows result tooltip
@@ -44,7 +44,7 @@ Three message types flow via `chrome.tabs.sendMessage`:
 
 ### Key architectural rules
 
-**Service worker listeners must be registered synchronously** — MV3 service workers can be terminated after ~5 min idle. Listeners registered inside `async` functions or after an `await` will be lost on revival. Always register `chrome.contextMenus.onClicked.addListener` at the top level.
+**Service worker listeners must be registered synchronously** — MV3 service workers can be terminated after ~5 min idle. Listeners registered inside `async` functions or after an `await` will be lost on revival. Always register `chrome.contextMenus.onClicked.addListener` and `chrome.commands.onCommand.addListener` at the top level.
 
 **Content script must remain IIFE** — MV3 content scripts do not support `type: "module"`. Only `background.js` and `options.js` use ES module `import/export`.
 
@@ -88,6 +88,12 @@ Delivery is fire-and-forget: the tooltip renders immediately, the POST runs in t
 Permissions are granted **per-origin at runtime** via `chrome.permissions.request` (triggered by the Test button in options). The manifest declares `optional_host_permissions: ["http://*/*", "https://*/*"]` so users only grant access to the specific origins they configure (e.g. `https://api.notion.com/*`). Without this prompt, fetch will fail at runtime — the user's first action will surface a "Network error" badge.
 
 The payload schema is fixed for now: `{ result, actionName, sourceText, pageUrl, pageTitle, timestamp, modelUsed }`. Adapter services (Zapier, n8n, custom) reshape this for downstream APIs that need different bodies (Slack `{text}`, Notion `{parent, properties, children}`). Templates are a future enhancement.
+
+### Keyboard shortcuts
+
+`chrome.commands` are static (declared in `manifest.json`) — Chrome does not allow per-action dynamic commands. The extension declares 4 fixed slots `run-action-1..4` (suggested defaults Ctrl+Shift+1..4; on macOS only slots 1–2 get suggestions since Cmd+Shift+3/4 are system screenshots). Each action has a `shortcutSlot: '' | '1'..'4'` field (sync storage); the options action card has a `.action-shortcut` select whose labels show the live key combos from `chrome.commands.getAll()`. Slot uniqueness: auto-steal in the options DOM (radio-like) + duplicate rejection in `saveSettings`.
+
+Trigger path: `chrome.commands.onCommand → handleCommand` in `background.js` — maps the command to the action via `shortcutSlot`, reads the selection from the page with `getSelectionFromTab` (`chrome.scripting.executeScript`; content.js is receive-only), then calls the shared `runAction`. Empty selection shows a "Select some text first" tooltip (requires the `AI_PROCESSING_START` + `AI_ERROR` pair — content.js gates `AI_ERROR` on the requestId set by START). Restricted pages are a silent no-op. Context-menu titles append the current combo (e.g. "Translate to English (Ctrl+Shift+1)"), refreshed on every menu rebuild. Key combos themselves live in Chrome (`chrome://extensions/shortcuts`), not in extension storage — the options footer links there via `chrome.tabs.create` (plain anchors to chrome:// are blocked).
 
 ### Options page tabs
 
