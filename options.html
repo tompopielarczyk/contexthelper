@@ -162,6 +162,10 @@
               </svg>
               Add action
             </button>
+
+            <p class="shortcuts-hint">Tip: assign a keyboard shortcut slot per action. Change the key combos at
+              <button type="button" id="openShortcutsPage" class="btn-link">chrome://extensions/shortcuts</button>
+            </p>
           </div>
         </section>
       </div>
@@ -304,6 +308,8 @@
             <option value="insert">Insert text</option>
           </select>
           <select class="input input-select action-webhook" data-field="webhookId" title="POST result to webhook (tooltip mode only)">
+          </select>
+          <select class="input input-select action-shortcut" data-field="shortcutSlot" title="Keyboard shortcut">
           </select>
         </div>
       </div>

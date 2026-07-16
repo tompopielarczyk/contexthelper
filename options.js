@@ -33,6 +33,9 @@ let draggedCard = null;
 let saveStatusTimeoutId = 0;
 
 const CUSTOM_MODEL_VALUE = '__custom__';
+const SHORTCUT_SLOTS = ['1', '2', '3', '4'];
+const COMMAND_SLOT_RE = /^run-action-([1-4])$/;
+const commandShortcuts = new Map(); // slot -> current key combo ('' when unbound)
 
 // ── Init ────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
@@ -42,6 +45,16 @@ const systemDarkMedia = window.matchMedia('(prefers-color-scheme: dark)');
 
 async function init() {
   const settings = await getSettings();
+
+  // Load current key combos before rendering action cards (labels depend on them)
+  try {
+    for (const command of await chrome.commands.getAll()) {
+      const slot = COMMAND_SLOT_RE.exec(command.name)?.[1];
+      if (slot) commandShortcuts.set(slot, command.shortcut || '');
+    }
+  } catch {
+    // commands API unavailable — selects fall back to "(not set)" labels
+  }
 
   // Tabs
   initTabs();
@@ -119,7 +132,12 @@ async function init() {
   renderActions(settings.actions || getDefaultActions());
 
   addActionBtn.addEventListener('click', () => {
-    addActionCard({ name: '', template: '{{text}}', displayMode: 'auto', modelConfigId: '', webhookId: '', targetLang: '' });
+    addActionCard({ name: '', template: '{{text}}', displayMode: 'auto', modelConfigId: '', webhookId: '', targetLang: '', shortcutSlot: '' });
+  });
+
+  // chrome:// URLs are blocked as plain anchors — open via tabs API
+  document.getElementById('openShortcutsPage').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
   });
 
   // Restore defaults
@@ -563,6 +581,11 @@ function refreshActionModelSelectors() {
   }
 }
 
+function slotLabel(slot) {
+  const combo = commandShortcuts.get(slot);
+  return combo ? `Shortcut ${slot} (${combo})` : `Shortcut ${slot} (not set)`;
+}
+
 // DeepL-backed actions have no template — swap the textarea for a target-language select.
 // The textarea stays in the DOM (hidden) so its value survives switching configs.
 function syncActionCardMode(card, configs) {
@@ -593,6 +616,7 @@ function addActionCard(action) {
   const displayModeSelect = card.querySelector('.action-display-mode');
   const modelConfigSelect = card.querySelector('.action-model-config');
   const webhookSelect = card.querySelector('.action-webhook');
+  const shortcutSelect = card.querySelector('.action-shortcut');
   const deleteBtn = card.querySelector('.action-delete');
 
   nameInput.value = action.name;
@@ -606,6 +630,27 @@ function addActionCard(action) {
     if (lang.id === action.targetLang) opt.selected = true;
     targetLangSelect.appendChild(opt);
   }
+
+  const noneOpt = document.createElement('option');
+  noneOpt.value = '';
+  noneOpt.textContent = 'No shortcut';
+  shortcutSelect.appendChild(noneOpt);
+  for (const slot of SHORTCUT_SLOTS) {
+    const opt = document.createElement('option');
+    opt.value = slot;
+    opt.textContent = slotLabel(slot);
+    if (slot === action.shortcutSlot) opt.selected = true;
+    shortcutSelect.appendChild(opt);
+  }
+
+  // A slot binds to one action — picking a taken slot steals it (radio-like);
+  // saveSettings rejects duplicates as the backstop.
+  shortcutSelect.addEventListener('change', () => {
+    if (!shortcutSelect.value) return;
+    for (const other of actionsList.querySelectorAll('.action-shortcut')) {
+      if (other !== shortcutSelect && other.value === shortcutSelect.value) other.value = '';
+    }
+  });
 
   // Populate model config selector
   const configs = collectModelConfigs();
@@ -767,8 +812,9 @@ function collectActions() {
     const modelConfigId = card.querySelector('.action-model-config').value;
     const webhookId = card.querySelector('.action-webhook')?.value || '';
     const targetLang = card.querySelector('.action-target-lang').value;
+    const shortcutSlot = card.querySelector('.action-shortcut')?.value || '';
     if (name) {
-      actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, webhookId, targetLang });
+      actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, webhookId, targetLang, shortcutSlot });
     }
   }
   return actions;

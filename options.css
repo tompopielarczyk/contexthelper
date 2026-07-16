@@ -967,8 +967,9 @@ body.dark .webhook-card:hover {
   border-color: var(--gray-300);
 }
 
-/* Action webhook dropdown — mirrors action-model-config */
-.action-webhook {
+/* Action webhook + shortcut dropdowns — mirror action-model-config */
+.action-webhook,
+.action-shortcut {
   width: auto;
   min-width: 120px;
   max-width: 180px;
@@ -976,6 +977,23 @@ body.dark .webhook-card:hover {
   font-size: 12px;
   color: var(--gray-500);
   background-position: right 6px center;
+}
+
+.shortcuts-hint {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--gray-400);
+}
+
+.btn-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: inherit;
+  font-family: inherit;
+  color: var(--orange-500);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 @media (max-width: 600px) {
@@ -999,7 +1017,8 @@ body.dark .webhook-card:hover {
   .action-meta-row,
   .action-model-config,
   .action-display-mode,
-  .action-webhook {
+  .action-webhook,
+  .action-shortcut {
     width: 100%;
     max-width: none;
   }
