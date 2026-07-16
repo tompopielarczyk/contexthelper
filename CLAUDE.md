@@ -37,8 +37,11 @@ Supported providers: Anthropic, OpenAI, Google Gemini, OpenRouter (includes open
 
 Three message types flow via `chrome.tabs.sendMessage`:
 - `AI_PROCESSING_START` — carries `tooltipSettings`; content script shows spinner
-- `AI_RESULT` — carries `text`, `editable`, `displayMode`, `tooltipSettings`
+- `AI_RESULT` — carries `text`, `editable`, `displayMode`, `tooltipSettings`, plus `webhooks` (`[{id, name}]` — names only, no secrets) and `webhookData` (payload fields for a manual webhook send)
 - `AI_ERROR` — carries `message`, `tooltipSettings`
+
+One message type flows the other way (content script → background, `chrome.runtime.sendMessage`):
+- `SEND_WEBHOOK` — carries `webhookId` + `webhookData`; the background resolves the webhook from storage, renders its payload template, delivers it, and answers `{ok}` or `{ok: false, error}` via `sendResponse`
 
 `sendToTab()` in `background.js` silently catches errors when the content script isn't loaded (restricted pages like `chrome://`).
 
@@ -50,7 +53,7 @@ Three message types flow via `chrome.tabs.sendMessage`:
 
 **Shadow DOM isolation** — all UI (tooltip, spinner) lives inside a closed Shadow DOM attached to a host `div`. This prevents host page styles from leaking in. `content.css` resets the host element (`all: initial !important`), while internal styles are injected via `getShadowStyles()` into the shadow root. Keep both in sync — `content.css` protects against host-page interference, `getShadowStyles()` defines the actual component styles.
 
-**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey }`) and `webhooks` (array of `{ id, name, url, method, headers }`) — both contain secrets and are not synced to Google account. `chrome.storage.sync` holds `actions`, `tooltipSettings`, `systemPrompt`, `darkMode`. Actions reference model configs via `modelConfigId` and webhooks via `webhookId`. The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
+**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey }`) and `webhooks` (array of `{ id, name, url, method, headers, template }`) — both contain secrets and are not synced to Google account. `chrome.storage.sync` holds `actions`, `tooltipSettings`, `systemPrompt`, `darkMode`. Actions reference model configs via `modelConfigId`; webhooks are a global list, not bound to actions (a legacy `webhookId` field on actions is stripped on read and write). The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
 
 **Migration** — `getSettings()` auto-migrates two legacy schemas: (1) old single-provider data (separate `provider`, `model`, `apiKey` fields) into a `modelConfigs` array on first access — idempotent via `modelConfigs === null` check, creates one config from old fields, assigns it to all actions, cleans up old keys. (2) Legacy boolean `darkMode` is mapped to the tri-state form: `true` → `'dark'`, `false` → `'auto'`. New installs default to `'auto'`, which follows `prefers-color-scheme` via `matchMedia` (re-applied on system theme change while in `'auto'`).
 
@@ -79,21 +82,19 @@ Each action has a `displayMode` field:
 
 ### Webhook delivery
 
-Actions can optionally POST their AI result to a user-configured external endpoint (Notion, Slack, Zapier, n8n, custom). Webhooks live in `chrome.storage.local` (Bearer tokens are secrets) under `webhooks: [{ id, name, url, method, headers: [{key,value}] }]`. Each action references one via `webhookId` (`''` = none).
+Webhook delivery is **manual, from the result tooltip** — there is no automatic delivery. Webhooks are a global list in `chrome.storage.local` (Bearer tokens are secrets) under `webhooks: [{ id, name, url, method, headers: [{key,value}], template }]`; they are not bound to actions.
 
-`background.js` calls `sendWebhook` only when the result will appear in a tooltip — i.e. `displayMode === 'tooltip'`, or `displayMode === 'auto'` with a non-editable selection (`!info.editable`). Insert mode skips webhook delivery. AI errors also skip webhook delivery (no point logging failures to Notion).
+Every result tooltip offers a send control (built by `createWebhookSendControl` in `content.js`): one webhook renders a direct "Send to <name>" button, several render a "Send ▾" drop-up menu. Clicking sends `SEND_WEBHOOK` to the background, which renders the webhook's payload template and delivers it; the button reflects the response (`Sending… / ✓ Sent / ⚠ Failed` with the error in its `title`, retry enabled on failure). Insert mode shows no tooltip, hence no send — that is by design. AI errors show no send control either.
 
-Delivery is fire-and-forget: the tooltip renders immediately, the POST runs in the background. On failure, `background.js` sends a `WEBHOOK_FAILED` message to the content script, which attaches a small ⚠ badge in the bottom-left of the active tooltip with the error in its `title`. The badge is gated by `requestId` so a stale failure does not decorate a newer tooltip.
+**Payload templates** — each webhook has a `template`: a JSON document with placeholders (`{{result}}`, `{{sourceText}}`, `{{actionName}}`, `{{pageUrl}}`, `{{pageTitle}}`, `{{timestamp}}`, `{{modelUsed}}`) inside string values. `renderTemplate` in `lib/webhook.js` parses the template as JSON first and substitutes placeholders in the parsed tree, so quotes/newlines in AI output can never break the payload; unknown `{{...}}` tokens (e.g. n8n expressions) pass through untouched. `DEFAULT_WEBHOOK_TEMPLATE` reproduces the classic flat schema. `saveSettings` rejects templates that don't parse as JSON. The Test button sends the real template rendered with sample data, so a passing test validates the actual payload shape.
 
-Permissions are granted **per-origin at runtime** via `chrome.permissions.request` (triggered by the Test button in options). The manifest declares `optional_host_permissions: ["http://*/*", "https://*/*"]` so users only grant access to the specific origins they configure (e.g. `https://api.notion.com/*`). Without this prompt, fetch will fail at runtime — the user's first action will surface a "Network error" badge.
-
-The payload schema is fixed for now: `{ result, actionName, sourceText, pageUrl, pageTitle, timestamp, modelUsed }`. Adapter services (Zapier, n8n, custom) reshape this for downstream APIs that need different bodies (Slack `{text}`, Notion `{parent, properties, children}`). Templates are a future enhancement.
+Permissions are granted **per-origin at runtime** via `chrome.permissions.request` — a single combined prompt on Save (`requestWebhookPermissions`, called before any `await` to preserve the user gesture) and per-webhook on Test. The manifest declares `optional_host_permissions: ["http://*/*", "https://*/*"]` so users only grant access to the specific origins they configure (e.g. `https://api.notion.com/*`).
 
 ### Keyboard shortcuts
 
 `chrome.commands` are static (declared in `manifest.json`) — Chrome does not allow per-action dynamic commands. The extension declares 4 fixed slots `run-action-1..4` (suggested defaults Ctrl+Shift+1..4; on macOS only slots 1–2 get suggestions since Cmd+Shift+3/4 are system screenshots). Each action has a `shortcutSlot: '' | '1'..'4'` field (sync storage); the options action card has a `.action-shortcut` select whose labels show the live key combos from `chrome.commands.getAll()`. Slot uniqueness: auto-steal in the options DOM (radio-like) + duplicate rejection in `saveSettings`.
 
-Trigger path: `chrome.commands.onCommand → handleCommand` in `background.js` — maps the command to the action via `shortcutSlot`, reads the selection from the page with `getSelectionFromTab` (`chrome.scripting.executeScript`; content.js is receive-only), then calls the shared `runAction`. Empty selection shows a "Select some text first" tooltip (requires the `AI_PROCESSING_START` + `AI_ERROR` pair — content.js gates `AI_ERROR` on the requestId set by START). Restricted pages are a silent no-op. Context-menu titles append the current combo (e.g. "Translate to English (Ctrl+Shift+1)"), refreshed on every menu rebuild. Key combos themselves live in Chrome (`chrome://extensions/shortcuts`), not in extension storage — the options footer links there via `chrome.tabs.create` (plain anchors to chrome:// are blocked).
+Trigger path: `chrome.commands.onCommand → handleCommand` in `background.js` — maps the command to the action via `shortcutSlot`, reads the selection from the page with `getSelectionFromTab` (`chrome.scripting.executeScript`), then calls the shared `runAction`. Empty selection shows a "Select some text first" tooltip (requires the `AI_PROCESSING_START` + `AI_ERROR` pair — content.js gates `AI_ERROR` on the requestId set by START). Restricted pages are a silent no-op. Context-menu titles append the current combo (e.g. "Translate to English (Ctrl+Shift+1)"), refreshed on every menu rebuild. Key combos themselves live in Chrome (`chrome://extensions/shortcuts`), not in extension storage — the options footer links there via `chrome.tabs.create` (plain anchors to chrome:// are blocked).
 
 ### Options page tabs
 
