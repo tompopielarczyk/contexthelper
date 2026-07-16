@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ContextHelper",
   "version": "1.0.0",
-  "description": "AI-powered text actions via right-click context menu. Supports Anthropic, OpenAI, Google Gemini, and OpenRouter.",
+  "description": "AI-powered text actions via right-click context menu. Supports Anthropic, OpenAI, Google Gemini, OpenRouter, and DeepL.",
   "permissions": [
     "contextMenus",
     "storage",
@@ -13,7 +13,9 @@
     "https://api.anthropic.com/*",
     "https://api.openai.com/*",
     "https://openrouter.ai/api/*",
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.deepl.com/*",
+    "https://api-free.deepl.com/*"
   ],
   "optional_host_permissions": [
     "http://*/*",
