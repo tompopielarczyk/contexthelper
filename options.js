@@ -748,11 +748,17 @@ async function onSave() {
   // await) — otherwise the first tooltip send would fail with a network error.
   const permissionsPromise = requestWebhookPermissions(webhooks.map(w => w.url).filter(Boolean));
 
+  // width/height are owned by the tooltip's resize handle (content.js), not by
+  // this form — re-read them fresh so saving options doesn't reset the size.
+  const { tooltipSettings: currentTs } = await getSettings();
+
   const tooltipSettings = {
     bgColor: tooltipBgColor.value,
     fontColor: tooltipFontColor.value,
     fontSize: parseInt(tooltipFontSize.value, 10),
-    position: tooltipPosition.value
+    position: tooltipPosition.value,
+    width: currentTs.width,
+    height: currentTs.height
   };
 
   try {

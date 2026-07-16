@@ -73,6 +73,8 @@ One message type flows the other way (content script → background, `chrome.run
 
 Content script tracks event listeners in `activeCleanups[]`. Every `showLoading/showResultTooltip/showErrorTooltip` call runs `hideOverlay()` first, which iterates and invokes all cleanup functions (removing keydown listeners, clearing timers, etc.) before building new UI. This prevents listener leaks across multiple sequential AI calls.
 
+**Resizable result tooltip** — the result tooltip (`.cmn-resizable`) has a native CSS `resize: both` handle; a `ResizeObserver` (`observeTooltipResize`) detects the drag, releases the default 400px max-height cap, and debounce-saves the size into `tooltipSettings.width/height` (sync storage, sanitized to 240–1200 × 120–900 in `lib/storage.js`; `null` = auto). Subsequent tooltips open at the stored width with the stored height as `max-height` (short results stay compact). Options save re-reads these two fields from storage so the Appearance form doesn't reset them. Error tooltips and the spinner are not resizable.
+
 ### Action `displayMode`
 
 Each action has a `displayMode` field:
