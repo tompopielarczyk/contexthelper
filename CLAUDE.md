@@ -102,6 +102,16 @@ The payload schema is fixed for now: `{ result, actionName, sourceText, pageUrl,
 5. Add `<option>` to provider `<select>` in `modelConfigTemplate` in `options.html`
 6. Add host permission in `manifest.json`
 
+### DeepL (non-LLM provider)
+
+DeepL is a translation API, not a chat LLM, so it deviates from the checklist above:
+- **No model** — the Model field is hidden in the config card (`syncProviderFields` in `options.js`), `model` is stored as `''`, and `saveSettings` skips the model requirement for `provider === 'deepl'`.
+- **Per-action `targetLang`** instead of a template — when an action's selected config is DeepL, `syncActionCardMode` in `options.js` hides the template textarea (kept in the DOM so its value survives switching configs) and shows a target-language `<select>` populated from `DEEPL_TARGET_LANGUAGES` in `lib/api-client.js`. Plain `EN`/`PT` are deprecated by DeepL — use regional variants (`EN-US`, `PT-BR`).
+- **Endpoint auto-detection** — `getDeepLBaseUrl(apiKey)` picks `api-free.deepl.com` when the key ends with `:fx`, otherwise `api.deepl.com`. Both origins are in `host_permissions`.
+- **No system prompt, no template substitution** — `background.js` sends the raw selection; `callAI` routes to `callDeepL` before any model resolution.
+- **Test button** calls `GET /v2/usage` (via `getDeepLUsage`) instead of a chat call, and shows the character quota.
+- **Error mapping** — DeepL returns 403 for bad keys (remapped to 401 for the shared message) and 456 when the character quota is exhausted (mapped in `APIError`).
+
 ### Action template syntax
 
-Templates must contain `{{text}}` as the placeholder for selected text. `replaceAll('{{text}}', selectedText)` is used (not `replace`) — this matters if a template uses the placeholder more than once.
+Templates must contain `{{text}}` as the placeholder for selected text. `replaceAll('{{text}}', selectedText)` is used (not `replace`) — this matters if a template uses the placeholder more than once. Exception: actions backed by a DeepL config bypass the template entirely (validation requires `targetLang` instead).
