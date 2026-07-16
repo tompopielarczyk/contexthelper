@@ -660,13 +660,14 @@ body {
 /* ── Action display mode selector ─────────────────── */
 .action-meta-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
+/* Full row above the selects — four dropdowns leave no room beside it */
 .action-hint {
-  flex: 1;
-  min-width: 0;
+  flex-basis: 100%;
   font-size: 11px;
   color: var(--gray-400);
 }
@@ -1008,8 +1009,7 @@ body.dark .webhook-card:hover {
   }
 
   .card-header,
-  .action-card,
-  .action-meta-row {
+  .action-card {
     flex-wrap: wrap;
   }
 
@@ -1021,9 +1021,5 @@ body.dark .webhook-card:hover {
   .action-shortcut {
     width: 100%;
     max-width: none;
-  }
-
-  .action-hint {
-    flex-basis: 100%;
   }
 }
