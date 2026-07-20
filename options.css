@@ -617,6 +617,8 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* Match the .input control height so grid rows line up */
+  min-height: 38px;
 }
 
 .input-range {
@@ -1031,17 +1033,24 @@ body.dark .webhook-card:hover {
   cursor: pointer;
 }
 
+.floating-appearance-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .floating-preview-wrap {
   position: relative;
   display: inline-block;
 }
 
-/* Live 1:1 preview of the on-page pill; click opens the emoji grid */
+/* Live 1:1 preview of the on-page pill; click opens the emoji grid.
+   Same fade-in + hover-expand animations as .cmn-float-btn in content.js —
+   updateFloatingPreview() restarts the animation on every change. */
 .floating-preview {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
+  padding: 7px 10px;
   background: #fff;
   border: 1px solid var(--gray-200);
   border-radius: 999px;
@@ -1049,21 +1058,39 @@ body.dark .webhook-card:hover {
   line-height: 1;
   cursor: pointer;
   box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
+  animation: floating-preview-in 0.15s ease-out;
+}
+
+@keyframes floating-preview-in {
+  from { opacity: 0; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .floating-preview:hover {
   border-color: var(--gray-300);
 }
 
+/* Collapsed by default, hover expands — mirrors .cmn-float-label */
 .floating-preview-label {
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
   font-size: 13px;
   color: var(--gray-700);
+  transition: max-width 0.15s ease, opacity 0.15s ease, margin-left 0.15s ease;
+}
+
+.floating-preview:hover .floating-preview-label {
+  max-width: 180px;
+  opacity: 1;
+  margin-left: 6px;
 }
 
 .floating-swatches {
   display: flex;
+  align-items: center;
   gap: 8px;
-  margin-top: 10px;
 }
 
 .floating-swatch {

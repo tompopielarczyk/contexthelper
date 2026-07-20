@@ -851,6 +851,11 @@ function setFloatingBg(color) {
 
 // Mirrors the content.js button: custom background inline + auto-contrast label
 function updateFloatingPreview() {
+  // Restart the fade-in/scale animation, like the button appearing on a page
+  floatingPreview.style.animation = 'none';
+  void floatingPreview.offsetWidth;
+  floatingPreview.style.animation = '';
+
   floatingPreviewEmoji.textContent = floatingEmojiValue || '✨';
   const selected = floatingAction.options[floatingAction.selectedIndex];
   floatingPreviewLabel.textContent = floatingAction.value && selected ? selected.textContent : 'no action';

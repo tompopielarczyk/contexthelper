@@ -152,14 +152,16 @@
 
               <div class="field floating-appearance-field">
                 <label class="field-label">Button appearance</label>
-                <div class="floating-preview-wrap">
-                  <button type="button" id="floatingPreview" class="floating-preview" title="Click to change the emoji">
-                    <span id="floatingPreviewEmoji">✨</span>
-                    <span id="floatingPreviewLabel" class="floating-preview-label"></span>
-                  </button>
-                  <div id="floatingEmojiPicker" class="emoji-picker" hidden></div>
+                <div class="floating-appearance-controls">
+                  <div class="floating-preview-wrap">
+                    <button type="button" id="floatingPreview" class="floating-preview" title="Click to change the emoji">
+                      <span id="floatingPreviewEmoji">✨</span>
+                      <span id="floatingPreviewLabel" class="floating-preview-label"></span>
+                    </button>
+                    <div id="floatingEmojiPicker" class="emoji-picker" hidden></div>
+                  </div>
+                  <div id="floatingSwatches" class="floating-swatches"></div>
                 </div>
-                <div id="floatingSwatches" class="floating-swatches"></div>
                 <input type="color" id="floatingBgColor" class="swatch-color-input" value="#ffffff" tabindex="-1" aria-hidden="true">
               </div>
 
