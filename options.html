@@ -89,40 +89,54 @@
           </div>
 
           <div class="card-body">
-            <div class="tooltip-settings-grid">
-              <div class="field">
-                <label class="field-label" for="tooltipBgColor">Background color</label>
-                <div class="color-input-group">
-                  <input type="color" id="tooltipBgColor" class="input-color" value="#ffffff">
-                  <input type="text" id="tooltipBgColorText" class="input input-color-text" value="#ffffff" maxlength="7" placeholder="#ffffff">
-                </div>
-              </div>
+            <!-- Live preview in context: the result tooltip under a fake selection -->
+            <div class="floating-scene">
+              <p class="floating-scene-text">
+                Lorem ipsum dolor sit amet, <mark class="floating-scene-selection">consectetur adipiscing elit</mark>, sed do eiusmod tempor incididunt ut labore.
+              </p>
+              <div id="tooltipPreview" class="tooltip-preview">This is what an AI result will look like — style it below.</div>
+            </div>
 
-              <div class="field">
-                <label class="field-label" for="tooltipFontColor">Font color</label>
-                <div class="color-input-group">
-                  <input type="color" id="tooltipFontColor" class="input-color" value="#1f2937">
-                  <input type="text" id="tooltipFontColorText" class="input input-color-text" value="#1f2937" maxlength="7" placeholder="#1f2937">
-                </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">Background</span>
+                <span class="setting-desc">Tooltip background color</span>
               </div>
+              <div id="tooltipBgSwatches" class="floating-swatches"></div>
+              <input type="color" id="tooltipBgColor" class="swatch-color-input" value="#ffffff" tabindex="-1" aria-hidden="true">
+            </div>
 
-              <div class="field">
-                <label class="field-label" for="tooltipFontSize">Font size</label>
-                <div class="range-input-group">
-                  <input type="range" id="tooltipFontSize" class="input-range" min="10" max="24" value="14" step="1">
-                  <span id="tooltipFontSizeValue" class="range-value">14px</span>
-                </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">Font color</span>
+                <span class="setting-desc">Result text color</span>
               </div>
+              <div id="tooltipFontSwatches" class="floating-swatches"></div>
+              <input type="color" id="tooltipFontColor" class="swatch-color-input" value="#1f2937" tabindex="-1" aria-hidden="true">
+            </div>
 
-              <div class="field">
-                <label class="field-label" for="tooltipPosition">Position</label>
-                <select id="tooltipPosition" class="input input-select">
-                  <option value="below">Below selection</option>
-                  <option value="above">Above selection</option>
-                  <option value="left">Left of selection</option>
-                  <option value="right">Right of selection</option>
-                </select>
+            <div class="setting-row">
+              <div class="setting-info">
+                <label class="setting-label" for="tooltipFontSize">Font size</label>
+                <span class="setting-desc">Result text size</span>
               </div>
+              <div class="range-input-group setting-range">
+                <input type="range" id="tooltipFontSize" class="input-range" min="10" max="24" value="14" step="1">
+                <span id="tooltipFontSizeValue" class="range-value">14px</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <label class="setting-label" for="tooltipPosition">Position</label>
+                <span class="setting-desc">Where the tooltip opens relative to the selection</span>
+              </div>
+              <select id="tooltipPosition" class="input input-select setting-select">
+                <option value="below">Below selection</option>
+                <option value="above">Above selection</option>
+                <option value="left">Left of selection</option>
+                <option value="right">Right of selection</option>
+              </select>
             </div>
           </div>
         </section>

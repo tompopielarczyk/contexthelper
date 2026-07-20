@@ -20,9 +20,10 @@ const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const darkModeToggle = document.getElementById('darkModeToggle');
 const tooltipBgColor = document.getElementById('tooltipBgColor');
-const tooltipBgColorText = document.getElementById('tooltipBgColorText');
+const tooltipBgSwatches = document.getElementById('tooltipBgSwatches');
 const tooltipFontColor = document.getElementById('tooltipFontColor');
-const tooltipFontColorText = document.getElementById('tooltipFontColorText');
+const tooltipFontSwatches = document.getElementById('tooltipFontSwatches');
+const tooltipPreview = document.getElementById('tooltipPreview');
 const tooltipFontSize = document.getElementById('tooltipFontSize');
 const tooltipFontSizeValue = document.getElementById('tooltipFontSizeValue');
 const tooltipPosition = document.getElementById('tooltipPosition');
@@ -86,32 +87,18 @@ async function init() {
 
   // Tooltip settings
   const ts = settings.tooltipSettings || getDefaultTooltipSettings();
-  tooltipBgColor.value = ts.bgColor;
-  tooltipBgColorText.value = ts.bgColor;
-  tooltipFontColor.value = ts.fontColor;
-  tooltipFontColorText.value = ts.fontColor;
   tooltipFontSize.value = ts.fontSize;
   tooltipFontSizeValue.textContent = `${ts.fontSize}px`;
   tooltipPosition.value = ts.position;
 
-  tooltipBgColor.addEventListener('input', () => {
-    tooltipBgColorText.value = tooltipBgColor.value;
-  });
-  tooltipBgColorText.addEventListener('input', () => {
-    if (/^#[0-9a-fA-F]{6}$/.test(tooltipBgColorText.value)) {
-      tooltipBgColor.value = tooltipBgColorText.value;
-    }
-  });
-  tooltipFontColor.addEventListener('input', () => {
-    tooltipFontColorText.value = tooltipFontColor.value;
-  });
-  tooltipFontColorText.addEventListener('input', () => {
-    if (/^#[0-9a-fA-F]{6}$/.test(tooltipFontColorText.value)) {
-      tooltipFontColor.value = tooltipFontColorText.value;
-    }
-  });
+  initSwatchGroup(tooltipBgSwatches, TOOLTIP_BG_PRESETS, tooltipBgColor, updateTooltipPreview)
+    .select(ts.bgColor);
+  initSwatchGroup(tooltipFontSwatches, TOOLTIP_FONT_PRESETS, tooltipFontColor, updateTooltipPreview)
+    .select(ts.fontColor);
+
   tooltipFontSize.addEventListener('input', () => {
     tooltipFontSizeValue.textContent = `${tooltipFontSize.value}px`;
+    updateTooltipPreview();
   });
 
   // System prompt
@@ -781,6 +768,15 @@ const FLOATING_EMOJI_CHOICES = [
 ];
 
 const FLOATING_BG_PRESETS = ['#ffffff', '#f3f4f6', '#1f2937', '#f97316', '#fef3c7', '#dbeafe', '#dcfce7'];
+const TOOLTIP_BG_PRESETS = FLOATING_BG_PRESETS;
+const TOOLTIP_FONT_PRESETS = ['#1f2937', '#374151', '#6b7280', '#f9fafb', '#ffffff', '#f97316'];
+
+// Live tooltip preview in the scene — same fields content.js applies on the page
+function updateTooltipPreview() {
+  tooltipPreview.style.background = tooltipBgColor.value;
+  tooltipPreview.style.color = tooltipFontColor.value;
+  tooltipPreview.style.fontSize = `${tooltipFontSize.value}px`;
+}
 
 // Live preview pill (click = emoji grid) + background swatches; state lives in
 // floatingEmojiValue/floatingBgValue, no form inputs.
@@ -817,40 +813,47 @@ function initFloatingAppearance(fb) {
     if (e.key === 'Escape') floatingEmojiPicker.hidden = true;
   });
 
-  for (const color of FLOATING_BG_PRESETS) {
+  initSwatchGroup(floatingSwatches, FLOATING_BG_PRESETS, floatingBgColor, (color) => {
+    floatingBgValue = color;
+    updateFloatingPreview();
+  }).select(fb.bgColor);
+}
+
+// Preset circles + a "custom" swatch backed by a hidden native color input.
+// select(color) marks the matching preset (or custom) active and fires onPick.
+function initSwatchGroup(container, presets, colorInput, onPick) {
+  const select = (color) => {
+    colorInput.value = color;
+    for (const swatch of container.querySelectorAll('.floating-swatch')) {
+      const isCustom = swatch.classList.contains('floating-swatch-custom');
+      swatch.classList.toggle('active', isCustom
+        ? !presets.includes(color)
+        : swatch.dataset.color === color);
+    }
+    onPick(color);
+  };
+
+  for (const color of presets) {
     const swatch = document.createElement('button');
     swatch.type = 'button';
     swatch.className = 'floating-swatch';
     swatch.dataset.color = color;
     swatch.style.background = color;
     swatch.title = color;
-    swatch.addEventListener('click', () => setFloatingBg(color));
-    floatingSwatches.appendChild(swatch);
+    swatch.addEventListener('click', () => select(color));
+    container.appendChild(swatch);
   }
 
   const custom = document.createElement('button');
   custom.type = 'button';
   custom.className = 'floating-swatch floating-swatch-custom';
   custom.title = 'Custom color';
-  custom.addEventListener('click', () => floatingBgColor.click());
-  floatingSwatches.appendChild(custom);
+  custom.addEventListener('click', () => colorInput.click());
+  container.appendChild(custom);
 
-  floatingBgColor.addEventListener('input', () => setFloatingBg(floatingBgColor.value));
+  colorInput.addEventListener('input', () => select(colorInput.value));
 
-  setFloatingBg(fb.bgColor);
-}
-
-function setFloatingBg(color) {
-  floatingBgValue = color;
-  floatingBgColor.value = color;
-  for (const swatch of floatingSwatches.querySelectorAll('.floating-swatch')) {
-    const isCustom = swatch.classList.contains('floating-swatch-custom');
-    const active = isCustom
-      ? !FLOATING_BG_PRESETS.includes(color)
-      : swatch.dataset.color === color;
-    swatch.classList.toggle('active', active);
-  }
-  updateFloatingPreview();
+  return { select };
 }
 
 // Mirrors the content.js button: custom background inline + auto-contrast label

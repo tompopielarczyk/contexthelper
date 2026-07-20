@@ -580,37 +580,18 @@ body {
 }
 
 /* ── Tooltip Settings ─────────────────────────────── */
-.tooltip-settings-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.tooltip-settings-grid > .field:nth-child(n+3) {
-  grid-column: 1 / -1;
-}
-
-.color-input-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.input-color {
-  width: 40px;
-  height: 36px;
+/* Mini result tooltip inside the preview scene — styled like .cmn-tooltip */
+.tooltip-preview {
+  max-width: 340px;
+  margin: 12px 0 0 24px;
+  padding: 12px 14px;
+  background: #fff;
+  color: #1f2937;
+  font-size: 14px;
+  line-height: 1.5;
   border: 1px solid var(--gray-200);
-  border-radius: var(--radius-sm);
-  padding: 2px;
-  cursor: pointer;
-  background: none;
-}
-
-.input-color-text {
-  width: 90px;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  text-transform: uppercase;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
 .range-input-group {
@@ -785,10 +766,6 @@ body.dark .btn-dashed:hover {
 
 body.dark .btn-icon:hover {
   background: var(--gray-200);
-}
-
-body.dark .input-color {
-  border-color: var(--gray-200);
 }
 
 body.dark .input-range {
