@@ -193,7 +193,12 @@ async function handleFloatingToggle(info, tab) {
     const usedByWebhook = (settings.webhooks || []).some(w => {
       try { return new URL(w.url).hostname.toLowerCase() === host; } catch { return false; }
     });
-    if (!usedByWebhook) {
+    // Removing a host covered by a required manifest pattern would subtract
+    // it from the active set and break API fetches (Chromium pattern-set
+    // subtraction — same pitfall as the all-sites untoggle in options.js)
+    const isApiHost = chrome.runtime.getManifest().host_permissions
+      .some(pattern => pattern.includes(`//${host}/`));
+    if (!usedByWebhook && !isApiHost) {
       try { await chrome.permissions.remove({ origins: floatingOriginsForHost(host) }); } catch { /* keep the grant */ }
     }
     return;

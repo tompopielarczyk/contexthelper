@@ -863,7 +863,11 @@ async function removeFloatingDomain(host) {
   const usedByWebhook = (webhooks || []).some(w => {
     try { return new URL(w.url).hostname.toLowerCase() === host; } catch { return false; }
   });
-  if (!usedByWebhook) {
+  // Removing a host covered by a required manifest pattern would subtract it
+  // from the active set and break API fetches (see onSave)
+  const isApiHost = chrome.runtime.getManifest().host_permissions
+    .some(pattern => pattern.includes(`//${host}/`));
+  if (!usedByWebhook && !isApiHost) {
     try {
       await chrome.permissions.remove({ origins: [`https://${host}/*`, `http://${host}/*`] });
     } catch { /* keep the grant */ }
@@ -895,11 +899,26 @@ async function onSave() {
   // await) — otherwise the first tooltip send would fail with a network error.
   const permissionsPromise = requestWebhookPermissions(webhooks.map(w => w.url).filter(Boolean));
 
-  // The all-sites grant needs the same gesture — request before any await too.
+  // The all-sites grant/cleanup needs the same gesture — start before any
+  // await too. Removing the broad https://*/* grant SUBTRACTS everything it
+  // contains from the active permission set, INCLUDING the required API
+  // host_permissions from the manifest (Chromium collapses pattern sets) —
+  // fetches then hit CORS as if the extension had no host access. The repair:
+  // re-request the manifest hosts right after the remove. They are still in
+  // the granted set, so this never prompts; it runs on every save as a
+  // self-heal for profiles already affected.
   const wantAllSites = floatingAllSites.checked;
-  const allSitesPromise = wantAllSites && !floatingAllSitesStored
-    ? chrome.permissions.request({ origins: ALL_SITE_ORIGINS }).catch(() => false)
-    : Promise.resolve(true);
+  const allSitesPromise = (async () => {
+    let granted = true;
+    if (wantAllSites && !floatingAllSitesStored) {
+      granted = await chrome.permissions.request({ origins: ALL_SITE_ORIGINS }).catch(() => false);
+    } else if (!wantAllSites && floatingAllSitesStored) {
+      await chrome.permissions.remove({ origins: ALL_SITE_ORIGINS }).catch(() => { /* keep the grant */ });
+    }
+    await chrome.permissions.request({ origins: chrome.runtime.getManifest().host_permissions })
+      .catch(() => { /* gesture consumed by a prompt above — next save repairs */ });
+    return granted;
+  })();
 
   // width/height are owned by the tooltip's resize handle (content.js), and
   // domains by the page context-menu toggle — re-read them fresh so saving
@@ -929,11 +948,6 @@ async function onSave() {
 
   try {
     await saveSettings({ modelConfigs, webhooks, actions, tooltipSettings, floatingButtonSettings, systemPrompt, darkMode });
-    if (floatingAllSitesStored && !floatingButtonSettings.allSites) {
-      // Untoggled — hand the broad grant back (per-origin webhook/domain
-      // grants are separate entries and stay untouched)
-      try { await chrome.permissions.remove({ origins: ALL_SITE_ORIGINS }); } catch { /* keep the grant */ }
-    }
     floatingAllSitesStored = floatingButtonSettings.allSites;
     syncFloatingDomainsDim();
     const granted = await permissionsPromise;
