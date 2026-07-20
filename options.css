@@ -1033,19 +1033,33 @@ body.dark .webhook-card:hover {
   cursor: pointer;
 }
 
+/* Centered, non-interactive live preview of the on-page pill */
+.floating-preview-row {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0 14px;
+}
+
+/* Emoji trigger + color swatches share one centered row below the preview */
 .floating-appearance-controls {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 16px;
 }
 
-.floating-preview-wrap {
+.floating-emoji-wrap {
   position: relative;
   display: inline-block;
 }
 
-/* Live 1:1 preview of the on-page pill; click opens the emoji grid.
-   Same fade-in + hover-expand animations as .cmn-float-btn in content.js —
+.floating-emoji-btn {
+  padding: 6px 10px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Same fade-in + hover-expand animations as .cmn-float-btn in content.js —
    updateFloatingPreview() restarts the animation on every change. */
 .floating-preview {
   display: inline-flex;
@@ -1056,7 +1070,7 @@ body.dark .webhook-card:hover {
   border-radius: 999px;
   font-size: 15px;
   line-height: 1;
-  cursor: pointer;
+  cursor: default;
   box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
   animation: floating-preview-in 0.15s ease-out;
 }
@@ -1064,10 +1078,6 @@ body.dark .webhook-card:hover {
 @keyframes floating-preview-in {
   from { opacity: 0; transform: scale(0.85); }
   to { opacity: 1; transform: scale(1); }
-}
-
-.floating-preview:hover {
-  border-color: var(--gray-300);
 }
 
 /* Collapsed by default, hover expands — mirrors .cmn-float-label */

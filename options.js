@@ -30,6 +30,7 @@ const floatingAction = document.getElementById('floatingAction');
 const floatingBgColor = document.getElementById('floatingBgColor');
 const floatingEmojiPicker = document.getElementById('floatingEmojiPicker');
 const floatingPreview = document.getElementById('floatingPreview');
+const floatingEmojiBtn = document.getElementById('floatingEmojiBtn');
 const floatingPreviewEmoji = document.getElementById('floatingPreviewEmoji');
 const floatingPreviewLabel = document.getElementById('floatingPreviewLabel');
 const floatingSwatches = document.getElementById('floatingSwatches');
@@ -798,13 +799,13 @@ function initFloatingAppearance(fb) {
     floatingEmojiPicker.appendChild(item);
   }
 
-  floatingPreview.addEventListener('click', () => {
+  floatingEmojiBtn.addEventListener('click', () => {
     floatingEmojiPicker.hidden = !floatingEmojiPicker.hidden;
   });
 
   document.addEventListener('click', (e) => {
     if (floatingEmojiPicker.hidden) return;
-    if (!floatingEmojiPicker.contains(e.target) && !floatingPreview.contains(e.target)) {
+    if (!floatingEmojiPicker.contains(e.target) && !floatingEmojiBtn.contains(e.target)) {
       floatingEmojiPicker.hidden = true;
     }
   });
@@ -857,6 +858,7 @@ function updateFloatingPreview() {
   floatingPreview.style.animation = '';
 
   floatingPreviewEmoji.textContent = floatingEmojiValue || '✨';
+  floatingEmojiBtn.textContent = floatingEmojiValue || '✨';
   const selected = floatingAction.options[floatingAction.selectedIndex];
   floatingPreviewLabel.textContent = floatingAction.value && selected ? selected.textContent : 'no action';
   floatingPreview.style.background = floatingBgValue;
