@@ -213,6 +213,11 @@ async function handleFloatingToggle(info, tab) {
   if (!await grantedPromise) return;
   await saveSettings({ floatingButtonSettings: { ...fb, domains: [...fb.domains, host] } });
 
+  // The registered content script only covers future navigations — inject
+  // into the current tab directly so the button works without a refresh
+  // (idempotent guard; the watcher picks the new domain up via storage.onChanged)
+  await ensureContentScript(tab.id);
+
   if (!fb.actionId) {
     await showTabNotice(tab.id,
       'Floating button enabled here — now pick its action in the ContextHelper settings (Appearance tab)',
