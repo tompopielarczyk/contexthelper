@@ -285,6 +285,9 @@ function addModelConfigCard(config) {
   modelDatalist.id = `model-list-${config.id}`;
   modelInput.setAttribute('list', modelDatalist.id);
   modelInput.value = config.model || getDefaultModel(config.provider);
+  // True while the field still holds an auto-filled default (never a user/saved value) —
+  // only then may a stale default be swapped for the closest live model
+  let modelAutoFilled = !config.model;
 
   // Flag models missing from the current list (retired defaults, typos) before Test/save.
   // Non-blocking — custom IDs newer than the list are legitimate.
@@ -297,10 +300,22 @@ function addModelConfigCard(config) {
       modelWarn.textContent = `⚠ "${value}" is not on this provider's model list — it may be retired or misspelled`;
     }
   };
-  modelInput.addEventListener('input', validateModel);
+  modelInput.addEventListener('input', () => {
+    modelAutoFilled = false;
+    validateModel();
+  });
+
+  const onListUpdate = () => {
+    const ids = Array.from(modelDatalist.options, o => o.value);
+    if (modelAutoFilled && ids.length > 0 && !ids.includes(modelInput.value.trim())) {
+      const replacement = closestModelId(modelInput.value.trim(), ids);
+      if (replacement) modelInput.value = replacement;
+    }
+    validateModel();
+  };
 
   const refreshModels = (forceFetch) =>
-    populateModelDatalist(modelDatalist, modelHint, providerSelect.value, apiKeyInput.value.trim(), forceFetch, validateModel);
+    populateModelDatalist(modelDatalist, modelHint, providerSelect.value, apiKeyInput.value.trim(), forceFetch, onListUpdate);
   refreshModels(false);
 
   // DeepL has no model — hide the whole Model field
@@ -313,6 +328,7 @@ function addModelConfigCard(config) {
   providerSelect.addEventListener('change', () => {
     if (providerSelect.value !== 'deepl') {
       modelInput.value = getDefaultModel(providerSelect.value);
+      modelAutoFilled = true;
       refreshModels(false);
     }
     syncProviderFields();
@@ -395,6 +411,29 @@ function showTestResultInCard(el, message, success) {
   el.textContent = message;
   el.className = `test-result model-config-test-result ${success ? 'success' : 'error'}`;
   el.hidden = false;
+}
+
+// Heals a retired default within its model family (e.g. gemini-3.1-flash-lite →
+// gemini-3.2-flash-lite once 3.1 drops off the list). Longest common prefix wins;
+// ties broken by shared name tokens so "-flash-lite" beats "-pro" of the same generation.
+function closestModelId(target, ids) {
+  const targetTokens = new Set(target.split(/[^a-z0-9]+/i).filter(Boolean));
+  let best = null;
+  let bestPrefix = 0;
+  let bestTokens = -1;
+  for (const id of ids) {
+    let prefix = 0;
+    const max = Math.min(id.length, target.length);
+    while (prefix < max && id[prefix] === target[prefix]) prefix++;
+    if (prefix === 0) continue;
+    const tokens = id.split(/[^a-z0-9]+/i).filter(t => targetTokens.has(t)).length;
+    if (prefix > bestPrefix || (prefix === bestPrefix && tokens > bestTokens)) {
+      bestPrefix = prefix;
+      bestTokens = tokens;
+      best = id;
+    }
+  }
+  return best;
 }
 
 // Fill the datalist: static list immediately, cached live list if present,
