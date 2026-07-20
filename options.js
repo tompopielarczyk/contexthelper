@@ -300,10 +300,12 @@ function addModelConfigCard(config) {
       modelWarn.textContent = `⚠ "${value}" is not on this provider's model list — it may be retired or misspelled`;
     }
   };
+  // No validation mid-typing — warn only once editing is done (change/blur)
   modelInput.addEventListener('input', () => {
     modelAutoFilled = false;
-    validateModel();
+    modelWarn.hidden = true;
   });
+  modelInput.addEventListener('change', validateModel);
 
   const onListUpdate = () => {
     const ids = Array.from(modelDatalist.options, o => o.value);
@@ -311,7 +313,7 @@ function addModelConfigCard(config) {
       const replacement = closestModelId(modelInput.value.trim(), ids);
       if (replacement) modelInput.value = replacement;
     }
-    validateModel();
+    if (document.activeElement !== modelInput) validateModel();
   };
 
   const refreshModels = (forceFetch) =>
