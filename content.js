@@ -558,6 +558,20 @@
     label.className = 'cmn-float-label';
     label.textContent = floatingSettings.actionName;
 
+    // Custom background (inline style also disables the CSS hover lightening);
+    // auto-contrast keeps the label readable on dark colors.
+    const bgColor = floatingSettings.bgColor;
+    if (/^#[0-9a-fA-F]{6}$/.test(bgColor || '') && bgColor.toLowerCase() !== '#ffffff') {
+      btn.style.background = bgColor;
+      const r = parseInt(bgColor.slice(1, 3), 16);
+      const g = parseInt(bgColor.slice(3, 5), 16);
+      const b = parseInt(bgColor.slice(5, 7), 16);
+      if (0.299 * r + 0.587 * g + 0.114 * b < 128) {
+        label.style.color = '#f9fafb';
+        btn.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+      }
+    }
+
     btn.appendChild(emoji);
     btn.appendChild(label);
 

@@ -28,6 +28,8 @@ const tooltipFontSizeValue = document.getElementById('tooltipFontSizeValue');
 const tooltipPosition = document.getElementById('tooltipPosition');
 const floatingAction = document.getElementById('floatingAction');
 const floatingEmoji = document.getElementById('floatingEmoji');
+const floatingBgColor = document.getElementById('floatingBgColor');
+const floatingBgColorText = document.getElementById('floatingBgColorText');
 const floatingDelay = document.getElementById('floatingDelay');
 const floatingDelayValue = document.getElementById('floatingDelayValue');
 const floatingAllSites = document.getElementById('floatingAllSites');
@@ -149,6 +151,8 @@ async function init() {
   const fb = settings.floatingButtonSettings || getDefaultFloatingButtonSettings();
   floatingAllSitesStored = fb.allSites;
   floatingEmoji.value = fb.emoji;
+  floatingBgColor.value = fb.bgColor;
+  floatingBgColorText.value = fb.bgColor;
   floatingDelay.value = fb.delayMs;
   floatingDelayValue.textContent = `${fb.delayMs} ms`;
   floatingAllSites.checked = fb.allSites;
@@ -158,6 +162,14 @@ async function init() {
 
   floatingDelay.addEventListener('input', () => {
     floatingDelayValue.textContent = `${floatingDelay.value} ms`;
+  });
+  floatingBgColor.addEventListener('input', () => {
+    floatingBgColorText.value = floatingBgColor.value;
+  });
+  floatingBgColorText.addEventListener('input', () => {
+    if (/^#[0-9a-fA-F]{6}$/.test(floatingBgColorText.value)) {
+      floatingBgColor.value = floatingBgColorText.value;
+    }
   });
   floatingAllSites.addEventListener('change', syncFloatingDomainsDim);
   // Re-populate from the live action cards right before the dropdown opens,
@@ -869,6 +881,7 @@ async function onSave() {
     delayMs: parseInt(floatingDelay.value, 10),
     actionId: floatingAction.value || null,
     emoji: floatingEmoji.value,
+    bgColor: floatingBgColor.value,
     domains: currentFb.domains,
     allSites: wantAllSites && allSitesGranted
   };
