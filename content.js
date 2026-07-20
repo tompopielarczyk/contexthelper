@@ -63,6 +63,7 @@
       case 'AI_PROCESSING_START':
         if (message.requestId !== undefined) activeRequestId = message.requestId;
         activeSelectionSnapshot = captureInsertionSnapshot();
+        hideFloatingButton();
         showLoading(ts);
         break;
       case 'AI_RESULT': {
@@ -447,6 +448,176 @@
     wrap.appendChild(btn);
     wrap.appendChild(menu);
     return wrap;
+  }
+
+  // ── Floating selection button ──
+  // Lives outside the .cmn-overlay lifecycle: hideOverlay() must not remove it,
+  // and it keeps its own cleanup list. Present only on pages matched by the
+  // dynamically registered content script (per-domain opt-in / allSites).
+
+  const FLOATING_MIN_SELECTION = 3;
+  let floatingSettings = null;   // sanitized floatingButtonSettings + actionName
+  let floatingEl = null;
+  let floatingTimer = null;
+  let floatingCleanups = [];
+  let floatingSelectionText = '';
+  let floatingMouseDown = false;
+
+  function floatingActive() {
+    return !!(floatingSettings && floatingSettings.actionId
+      && (floatingSettings.allSites
+        || (floatingSettings.domains || []).includes(location.hostname.toLowerCase())));
+  }
+
+  async function loadFloatingSettings() {
+    try {
+      const data = await chrome.storage.sync.get({ floatingButtonSettings: null, actions: [] });
+      const fb = data.floatingButtonSettings;
+      if (fb && typeof fb === 'object') {
+        const action = (data.actions || []).find(a => a.id === fb.actionId);
+        floatingSettings = { ...fb, actionName: action?.name || '' };
+      } else {
+        floatingSettings = null;
+      }
+    } catch {
+      floatingSettings = null; // extension reloaded mid-session
+    }
+    if (!floatingActive()) hideFloatingButton();
+  }
+
+  loadFloatingSettings();
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'sync' && (changes.floatingButtonSettings || changes.actions)) {
+        loadFloatingSettings();
+      }
+    });
+  } catch { /* storage API unavailable */ }
+
+  // Valid target: real page selection of enough text, outside editable contexts
+  function getFloatingSelectionText() {
+    if (isTextControl(document.activeElement)) return '';
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return '';
+    if (getEditableAncestor(sel.anchorNode) || getEditableAncestor(sel.focusNode)) return '';
+    const text = sel.toString();
+    return text.trim().length >= FLOATING_MIN_SELECTION ? text : '';
+  }
+
+  function scheduleFloatingButton() {
+    if (!floatingActive()) return;
+    clearTimeout(floatingTimer);
+    hideFloatingButton();
+    if (!getFloatingSelectionText()) return;
+    const delay = Number.isFinite(floatingSettings.delayMs) ? floatingSettings.delayMs : 800;
+    floatingTimer = setTimeout(showFloatingButton, Math.max(delay, 50));
+  }
+
+  document.addEventListener('selectionchange', scheduleFloatingButton);
+  document.addEventListener('mousedown', () => { floatingMouseDown = true; });
+  document.addEventListener('mouseup', () => {
+    floatingMouseDown = false;
+    scheduleFloatingButton();
+  });
+
+  // Anchor below the end of the selection (where the mouse was released)
+  function getFloatingPosition() {
+    let rect = null;
+    try {
+      const sel = window.getSelection();
+      const range = sel.getRangeAt(sel.rangeCount - 1).cloneRange();
+      range.collapse(false);
+      rect = range.getClientRects()[0] || range.getBoundingClientRect();
+    } catch { /* fall back to the last captured rect */ }
+    if (!rect || (rect.top === 0 && rect.left === 0 && rect.width === 0 && rect.height === 0)) {
+      rect = lastSelectionRect;
+    }
+    if (!rect) return { top: 100, left: 100 };
+    return { top: rect.bottom + 8, left: rect.left };
+  }
+
+  function showFloatingButton() {
+    if (floatingMouseDown) return; // still dragging — mouseup reschedules
+    const text = getFloatingSelectionText();
+    if (!text || !floatingActive()) return;
+
+    ensureShadowHost();
+    hideFloatingButton();
+    floatingSelectionText = text;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cmn-float-btn';
+    btn.title = floatingSettings.actionName || 'Run ContextHelper action';
+
+    const emoji = document.createElement('span');
+    emoji.className = 'cmn-float-emoji';
+    emoji.textContent = floatingSettings.emoji || '✨';
+
+    const label = document.createElement('span');
+    label.className = 'cmn-float-label';
+    label.textContent = floatingSettings.actionName;
+
+    btn.appendChild(emoji);
+    btn.appendChild(label);
+
+    // Keep the selection alive and don't let the outside-mousedown hider fire;
+    // mouseup must not bubble either — the document mouseup handler would
+    // reschedule (and remove) the button before its click event fires.
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    btn.addEventListener('mouseup', (e) => e.stopPropagation());
+    btn.addEventListener('click', onFloatingClick);
+
+    floatingEl = btn;
+    appendAndClampOverlay(btn, getFloatingPosition());
+
+    const escHandler = (e) => {
+      if (e.key === 'Escape') hideFloatingButton();
+    };
+    document.addEventListener('keydown', escHandler);
+    floatingCleanups.push(() => document.removeEventListener('keydown', escHandler));
+
+    const scrollHandler = () => hideFloatingButton();
+    window.addEventListener('scroll', scrollHandler, { capture: true, passive: true });
+    floatingCleanups.push(() => window.removeEventListener('scroll', scrollHandler, { capture: true }));
+
+    const outsideHandler = (e) => {
+      if (!overlayHost.contains(e.target)) hideFloatingButton();
+    };
+    document.addEventListener('mousedown', outsideHandler);
+    floatingCleanups.push(() => document.removeEventListener('mousedown', outsideHandler));
+  }
+
+  function hideFloatingButton() {
+    clearTimeout(floatingTimer);
+    floatingTimer = null;
+    for (const cleanup of floatingCleanups) {
+      try { cleanup(); } catch { /* keep cleaning up the rest */ }
+    }
+    floatingCleanups = [];
+    if (floatingEl) {
+      floatingEl.remove();
+      floatingEl = null;
+    }
+  }
+
+  function onFloatingClick() {
+    const text = getFloatingSelectionText() || floatingSelectionText;
+    const actionId = floatingSettings?.actionId;
+    hideFloatingButton();
+    if (!text || !actionId) return;
+    captureSelectionRect(); // spinner/result tooltip anchor
+    try {
+      chrome.runtime.sendMessage({
+        type: 'RUN_ACTION',
+        actionId,
+        selectionText: text,
+        editable: false // editable contexts never show the button
+      });
+    } catch { /* extension reloaded mid-session */ }
   }
 
   function isWritableTextControl(el) {
@@ -983,6 +1154,55 @@
 
       .cmn-send-item:hover {
         background: #f3f4f6;
+      }
+
+      /* Floating selection button — outside the .cmn-overlay lifecycle */
+      .cmn-float-btn {
+        position: fixed;
+        display: inline-flex;
+        align-items: center;
+        pointer-events: auto;
+        z-index: 2147483647;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        line-height: 1;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 999px;
+        padding: 6px 9px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        cursor: pointer;
+        animation: cmn-float-in 0.15s ease-out;
+      }
+
+      .cmn-float-btn:hover {
+        background: #f9fafb;
+        border-color: #d1d5db;
+      }
+
+      @keyframes cmn-float-in {
+        from { opacity: 0; transform: scale(0.85); }
+        to { opacity: 1; transform: scale(1); }
+      }
+
+      .cmn-float-emoji {
+        font-size: 15px;
+      }
+
+      /* Collapsed by default; hover expands the pill with the action name */
+      .cmn-float-label {
+        max-width: 0;
+        opacity: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        color: #374151;
+        font-size: 13px;
+        transition: max-width 0.15s ease, opacity 0.15s ease, margin-left 0.15s ease;
+      }
+
+      .cmn-float-btn:hover .cmn-float-label {
+        max-width: 180px;
+        opacity: 1;
+        margin-left: 6px;
       }
     `;
   }
