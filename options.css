@@ -1035,6 +1035,12 @@ body.dark .webhook-card:hover {
   color: var(--orange-600);
 }
 
+.model-config-model-hint,
+.model-config-model-warn {
+  text-align: right;
+  padding-right: 6px;
+}
+
 .field-hint code {
   font-size: 10px;
   background: var(--gray-100);
