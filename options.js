@@ -271,6 +271,7 @@ function addModelConfigCard(config) {
   const modelInput = card.querySelector('.model-config-model');
   const modelDatalist = card.querySelector('.model-config-datalist');
   const modelHint = card.querySelector('.model-config-model-hint');
+  const modelWarn = card.querySelector('.model-config-model-warn');
   const apiKeyInput = card.querySelector('.model-config-apikey');
   const toggleKeyBtn = card.querySelector('.model-config-toggle-key');
   const testBtn = card.querySelector('.model-config-test');
@@ -285,8 +286,21 @@ function addModelConfigCard(config) {
   modelInput.setAttribute('list', modelDatalist.id);
   modelInput.value = config.model || getDefaultModel(config.provider);
 
+  // Flag models missing from the current list (retired defaults, typos) before Test/save.
+  // Non-blocking — custom IDs newer than the list are legitimate.
+  const validateModel = () => {
+    const value = modelInput.value.trim();
+    const ids = Array.from(modelDatalist.options, o => o.value);
+    const unknown = Boolean(value) && ids.length > 0 && !ids.includes(value);
+    modelWarn.hidden = !unknown;
+    if (unknown) {
+      modelWarn.textContent = `⚠ "${value}" is not on this provider's model list — it may be retired or misspelled`;
+    }
+  };
+  modelInput.addEventListener('input', validateModel);
+
   const refreshModels = (forceFetch) =>
-    populateModelDatalist(modelDatalist, modelHint, providerSelect.value, apiKeyInput.value.trim(), forceFetch);
+    populateModelDatalist(modelDatalist, modelHint, providerSelect.value, apiKeyInput.value.trim(), forceFetch, validateModel);
   refreshModels(false);
 
   // DeepL has no model — hide the whole Model field
@@ -385,7 +399,7 @@ function showTestResultInCard(el, message, success) {
 
 // Fill the datalist: static list immediately, cached live list if present,
 // then a background refetch when the cache is stale/missing (or forceFetch).
-async function populateModelDatalist(datalist, hintEl, provider, apiKey, forceFetch) {
+async function populateModelDatalist(datalist, hintEl, provider, apiKey, forceFetch, onUpdate) {
   if (provider === 'deepl') return;
   const seq = (datalist._seq = (datalist._seq || 0) + 1);
 
@@ -400,6 +414,7 @@ async function populateModelDatalist(datalist, hintEl, provider, apiKey, forceFe
     }
     hintEl.textContent = label;
     hintEl.hidden = false;
+    if (onUpdate) onUpdate();
   };
 
   setList(getAvailableModels(provider), 'Built-in list');

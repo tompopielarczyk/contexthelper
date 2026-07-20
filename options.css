@@ -1031,6 +1031,10 @@ body.dark .webhook-card:hover {
   color: var(--gray-400);
 }
 
+.field-hint-warning {
+  color: var(--orange-600);
+}
+
 .field-hint code {
   font-size: 10px;
   background: var(--gray-100);
