@@ -1,5 +1,5 @@
-import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId } from './lib/storage.js';
-import { getAvailableModels, getDefaultModel, callAI, getDeepLUsage, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
+import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList } from './lib/storage.js';
+import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
 import { testWebhook, requestWebhookPermission, requestWebhookPermissions, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 
 // ── DOM refs ────────────────────────────────────────
@@ -50,7 +50,6 @@ let floatingBgValue = '#ffffff';
 
 const ALL_SITE_ORIGINS = ['http://*/*', 'https://*/*'];
 
-const CUSTOM_MODEL_VALUE = '__custom__';
 const SHORTCUT_SLOTS = ['1', '2', '3', '4'];
 const COMMAND_SLOT_RE = /^run-action-([1-4])$/;
 const commandShortcuts = new Map(); // slot -> current key combo ('' when unbound)
@@ -269,8 +268,9 @@ function addModelConfigCard(config) {
 
   const nameInput = card.querySelector('.model-config-name');
   const providerSelect = card.querySelector('.model-config-provider');
-  const modelSelect = card.querySelector('.model-config-model');
-  const customModelInput = card.querySelector('.model-config-custom-model');
+  const modelInput = card.querySelector('.model-config-model');
+  const modelDatalist = card.querySelector('.model-config-datalist');
+  const modelHint = card.querySelector('.model-config-model-hint');
   const apiKeyInput = card.querySelector('.model-config-apikey');
   const toggleKeyBtn = card.querySelector('.model-config-toggle-key');
   const testBtn = card.querySelector('.model-config-test');
@@ -281,29 +281,35 @@ function addModelConfigCard(config) {
   providerSelect.value = config.provider;
   apiKeyInput.value = config.apiKey;
 
-  populateModelSelect(modelSelect, customModelInput, config.provider, config.model);
+  modelDatalist.id = `model-list-${config.id}`;
+  modelInput.setAttribute('list', modelDatalist.id);
+  modelInput.value = config.model || getDefaultModel(config.provider);
+
+  const refreshModels = (forceFetch) =>
+    populateModelDatalist(modelDatalist, modelHint, providerSelect.value, apiKeyInput.value.trim(), forceFetch);
+  refreshModels(false);
 
   // DeepL has no model — hide the whole Model field
-  const modelField = modelSelect.closest('.field');
+  const modelField = modelInput.closest('.field');
   const syncProviderFields = () => {
-    const isDeepL = providerSelect.value === 'deepl';
-    modelField.hidden = isDeepL;
-    if (isDeepL) customModelInput.hidden = true;
+    modelField.hidden = providerSelect.value === 'deepl';
   };
   syncProviderFields();
 
   providerSelect.addEventListener('change', () => {
     if (providerSelect.value !== 'deepl') {
-      populateModelSelect(modelSelect, customModelInput, providerSelect.value, '');
+      modelInput.value = getDefaultModel(providerSelect.value);
+      refreshModels(false);
     }
     syncProviderFields();
     refreshActionModelSelectors();
   });
 
-  modelSelect.addEventListener('change', () => {
-    const isCustom = modelSelect.value === CUSTOM_MODEL_VALUE;
-    customModelInput.hidden = !isCustom;
-    if (isCustom) customModelInput.focus();
+  // A freshly entered key may unlock the live list — refetch after typing settles
+  let modelFetchTimer = 0;
+  apiKeyInput.addEventListener('input', () => {
+    clearTimeout(modelFetchTimer);
+    modelFetchTimer = setTimeout(() => refreshModels(true), 600);
   });
 
   toggleKeyBtn.addEventListener('click', () => {
@@ -333,9 +339,7 @@ function addModelConfigCard(config) {
         const fmt = n => n.toLocaleString('pl-PL');
         showTestResultInCard(testResult, `Connection OK — ${fmt(usage.characterCount)} / ${fmt(usage.characterLimit)} characters used`, true);
       } else {
-        const model = modelSelect.value === CUSTOM_MODEL_VALUE
-          ? customModelInput.value.trim()
-          : modelSelect.value;
+        const model = modelInput.value.trim();
         await callAI({
           provider: providerSelect.value,
           apiKey,
@@ -379,31 +383,42 @@ function showTestResultInCard(el, message, success) {
   el.hidden = false;
 }
 
-function populateModelSelect(selectEl, customInput, provider, selectedModel) {
-  const models = getAvailableModels(provider);
-  const defaultModel = getDefaultModel(provider);
-  const knownIds = models.map(m => m.id);
-  const isCustom = selectedModel && !knownIds.includes(selectedModel);
+// Fill the datalist: static list immediately, cached live list if present,
+// then a background refetch when the cache is stale/missing (or forceFetch).
+async function populateModelDatalist(datalist, hintEl, provider, apiKey, forceFetch) {
+  if (provider === 'deepl') return;
+  const seq = (datalist._seq = (datalist._seq || 0) + 1);
 
-  selectEl.textContent = '';
-  for (const m of models) {
-    const opt = document.createElement('option');
-    opt.value = m.id;
-    opt.textContent = m.name;
-    if (!isCustom && m.id === (selectedModel || defaultModel)) {
-      opt.selected = true;
+  const setList = (models, label) => {
+    if (datalist._seq !== seq) return;
+    datalist.textContent = '';
+    for (const m of models) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      if (m.name && m.name !== m.id) opt.label = m.name;
+      datalist.appendChild(opt);
     }
-    selectEl.appendChild(opt);
+    hintEl.textContent = label;
+    hintEl.hidden = false;
+  };
+
+  setList(getAvailableModels(provider), 'Built-in list');
+
+  const cached = await getCachedModelList(provider);
+  if (cached) setList(cached.models, `${cached.models.length} models · from API`);
+
+  const hasAuth = provider === 'openrouter' || apiKey;
+  if (!hasAuth || (cached && !cached.stale && !forceFetch)) return;
+
+  try {
+    const models = await fetchAvailableModels(provider, apiKey);
+    if (models && models.length > 0) {
+      await setCachedModelList(provider, models);
+      setList(models, `${models.length} models · from API`);
+    }
+  } catch {
+    // network/auth failure — keep whatever list is showing
   }
-
-  const customOpt = document.createElement('option');
-  customOpt.value = CUSTOM_MODEL_VALUE;
-  customOpt.textContent = 'Other...';
-  if (isCustom) customOpt.selected = true;
-  selectEl.appendChild(customOpt);
-
-  customInput.hidden = !isCustom;
-  if (isCustom) customInput.value = selectedModel;
 }
 
 // ── Webhooks ───────────────────────────────────────
@@ -547,11 +562,9 @@ function collectModelConfigs() {
   const configs = [];
   for (const card of cards) {
     const provider = card.querySelector('.model-config-provider').value;
-    const modelSelect = card.querySelector('.model-config-model');
-    const customModel = card.querySelector('.model-config-custom-model');
     const model = provider === 'deepl'
       ? ''
-      : (modelSelect.value === CUSTOM_MODEL_VALUE ? customModel.value.trim() : modelSelect.value);
+      : card.querySelector('.model-config-model').value.trim();
 
     configs.push({
       id: card.dataset.configId,

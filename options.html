@@ -293,8 +293,9 @@
           </div>
           <div class="field">
             <label class="field-label">Model</label>
-            <select class="input input-select model-config-model"></select>
-            <input type="text" class="input input-custom-model model-config-custom-model" placeholder="Model ID" hidden>
+            <input type="text" class="input input-model model-config-model" placeholder="Model ID" autocomplete="off" spellcheck="false">
+            <datalist class="model-config-datalist"></datalist>
+            <span class="field-hint model-config-model-hint" hidden></span>
           </div>
         </div>
         <div class="field">

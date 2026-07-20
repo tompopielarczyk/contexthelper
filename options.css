@@ -182,14 +182,9 @@ body {
   color: var(--gray-300);
 }
 
-.input-custom-model {
-  margin-top: 8px;
+.input-model {
   font-family: var(--font-mono);
   font-size: 13px;
-}
-
-.input-custom-model[hidden] {
-  display: none;
 }
 
 .input-key {
