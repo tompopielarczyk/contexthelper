@@ -23,7 +23,7 @@ lib/
   storage.js           # chrome.storage abstraction, default actions/settings
 ```
 
-Supported providers: Anthropic, OpenAI, Google Gemini, OpenRouter (includes open-source models). Each provider has its own `callXxx()` function in `api-client.js` + an "Other..." option in the model dropdown for arbitrary model IDs.
+Supported providers: Anthropic, OpenAI, Google Gemini, OpenRouter (includes open-source models). Each provider has its own `callXxx()` function in `api-client.js`. The model field is a free-text combobox (`<input>` + `<datalist>`) — any model ID can be typed directly (no "Other..." special case; see Model lists below).
 
 ### Data flow
 
@@ -54,7 +54,7 @@ Two message types flow the other way (content script → background, `chrome.run
 
 **Shadow DOM isolation** — all UI (tooltip, spinner) lives inside a closed Shadow DOM attached to a host `div`. This prevents host page styles from leaking in. `content.css` resets the host element (`all: initial !important`), while internal styles are injected via `getShadowStyles()` into the shadow root. Keep both in sync — `content.css` protects against host-page interference, `getShadowStyles()` defines the actual component styles.
 
-**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey }`) and `webhooks` (array of `{ id, name, url, method, headers, template }`) — both contain secrets and are not synced to Google account. `chrome.storage.sync` holds `actions`, `tooltipSettings`, `floatingButtonSettings`, `systemPrompt`, `darkMode`. Actions reference model configs via `modelConfigId`; webhooks are a global list, not bound to actions (a legacy `webhookId` field on actions is stripped on read and write). The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
+**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey }`), `webhooks` (array of `{ id, name, url, method, headers, template }`) — both contain secrets and are not synced to Google account — and `modelListCache` (per-provider live model lists, no secrets, just local-only cache). `chrome.storage.sync` holds `actions`, `tooltipSettings`, `floatingButtonSettings`, `systemPrompt`, `darkMode`. Actions reference model configs via `modelConfigId`; webhooks are a global list, not bound to actions (a legacy `webhookId` field on actions is stripped on read and write). The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
 
 **Migration** — `getSettings()` auto-migrates two legacy schemas: (1) old single-provider data (separate `provider`, `model`, `apiKey` fields) into a `modelConfigs` array on first access — idempotent via `modelConfigs === null` check, creates one config from old fields, assigns it to all actions, cleans up old keys. (2) Legacy boolean `darkMode` is mapped to the tri-state form: `true` → `'dark'`, `false` → `'auto'`. New installs default to `'auto'`, which follows `prefers-color-scheme` via `matchMedia` (re-applied on system theme change while in `'auto'`).
 
@@ -120,9 +120,14 @@ A third trigger path besides the context menu and keyboard shortcuts: select tex
 1. Add provider ID to `VALID_PROVIDERS` in `lib/storage.js`
 2. Add URL constant + `callXxx()` function in `lib/api-client.js`
 3. Add branch in `callAI()` in `lib/api-client.js`
-4. Add model list to `getAvailableModels()` and default model to `DEFAULT_MODELS` in `lib/api-client.js`
-5. Add `<option>` to provider `<select>` in `modelConfigTemplate` in `options.html`
-6. Add host permission in `manifest.json`
+4. Add fallback model list to `getAvailableModels()` and default model to `DEFAULT_MODELS` in `lib/api-client.js`
+5. Add a live-list branch in `fetchAvailableModels()` in `lib/api-client.js` (skip if the provider has no models endpoint — the static list then stays)
+6. Add `<option>` to provider `<select>` in `modelConfigTemplate` in `options.html`
+7. Add host permission in `manifest.json`
+
+### Model lists (live + fallback)
+
+The model combobox in options is fed from three layers, in order: the static fallback in `getAvailableModels()` (instant), the cached live list from `modelListCache` in `chrome.storage.local` (`getCachedModelList`/`setCachedModelList` in `lib/storage.js`, 24h TTL), and a background `fetchAvailableModels(provider, apiKey)` refetch when the cache is stale/missing — also re-triggered with a 600ms debounce after the API key changes (a new key may unlock the list). Fetch failures are silently swallowed; whatever list is showing stays. Per-provider notes: OpenAI's `/v1/models` is filtered to chat models (`OPENAI_CHAT_MODEL_RE`/`OPENAI_NON_CHAT_RE`); Gemini is filtered to `supportedGenerationMethods` containing `generateContent` and the `models/` prefix is stripped; OpenRouter's list is public (no key needed, ~300+ entries, hence the autocomplete combobox instead of a `<select>`); DeepL has none. `populateModelDatalist()` in `options.js` guards against out-of-order async updates with a per-datalist sequence counter.
 
 ### DeepL (non-LLM provider)
 
