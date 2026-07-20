@@ -1250,9 +1250,12 @@ body.dark .emoji-picker {
   background: #1a1f2e;
 }
 
-.floating-domains-field.dimmed .floating-domains-list {
-  opacity: 0.45;
-  pointer-events: none;
+/* Conditional visibility (JS sets hidden) — explicit rules because the
+   display: flex/inline-flex on these classes would beat the UA [hidden] style */
+.setting-row[hidden],
+.floating-domains-field[hidden],
+.floating-preview[hidden] {
+  display: none;
 }
 
 .floating-domains-list {

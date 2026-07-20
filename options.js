@@ -161,19 +161,22 @@ async function init() {
   floatingAllSites.checked = fb.allSites;
   refreshFloatingActionSelect(fb.actionId || '');
   renderFloatingDomains(fb.domains);
-  syncFloatingDomainsDim();
+  syncFloatingVisibility();
   initFloatingAppearance(fb);
 
   floatingDelay.addEventListener('input', () => {
     floatingDelayValue.textContent = `${floatingDelay.value} ms`;
   });
-  floatingAllSites.addEventListener('change', syncFloatingDomainsDim);
+  floatingAllSites.addEventListener('change', syncFloatingVisibility);
   // Re-populate from the live action cards right before the dropdown opens,
   // so freshly added/renamed (unsaved) actions are pickable too.
   floatingAction.addEventListener('mousedown', () => {
     refreshFloatingActionSelect(floatingAction.value);
   });
-  floatingAction.addEventListener('change', updateFloatingPreview);
+  floatingAction.addEventListener('change', () => {
+    updateFloatingPreview();
+    syncFloatingVisibility();
+  });
 
   // chrome:// URLs are blocked as plain anchors — open via tabs API
   document.getElementById('openShortcutsPage').addEventListener('click', () => {
@@ -932,9 +935,15 @@ async function removeFloatingDomain(host) {
   renderFloatingDomains(domains);
 }
 
-function syncFloatingDomainsDim() {
-  document.querySelector('.floating-domains-field')
-    .classList.toggle('dimmed', floatingAllSites.checked);
+// No pinned action → only the Action row (and the bare scene) stay visible;
+// all-sites on → the domain list is irrelevant and disappears entirely
+function syncFloatingVisibility() {
+  const hasAction = !!floatingAction.value;
+  floatingPreview.hidden = !hasAction;
+  for (const row of document.querySelectorAll('.floating-extra')) {
+    row.hidden = !hasAction;
+  }
+  document.querySelector('.floating-domains-field').hidden = !hasAction || floatingAllSites.checked;
 }
 
 // ── Restore Defaults ────────────────────────────────
@@ -1006,7 +1015,7 @@ async function onSave() {
   try {
     await saveSettings({ modelConfigs, webhooks, actions, tooltipSettings, floatingButtonSettings, systemPrompt, darkMode });
     floatingAllSitesStored = floatingButtonSettings.allSites;
-    syncFloatingDomainsDim();
+    syncFloatingVisibility();
     const granted = await permissionsPromise;
     const warnings = [];
     if (!granted) warnings.push('webhook origin permission not granted, sending will fail');
