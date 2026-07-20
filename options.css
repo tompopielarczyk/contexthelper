@@ -1016,6 +1016,73 @@ body.dark .webhook-card:hover {
   cursor: pointer;
 }
 
+/* ── Floating button card ──────────────────────────── */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  accent-color: var(--orange-500);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.floating-emoji-input {
+  width: 80px;
+  text-align: center;
+  font-size: 16px;
+}
+
+.floating-domains-field.dimmed .floating-domains-list {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.floating-domains-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.floating-domains-empty {
+  font-size: 12px;
+  color: var(--gray-400);
+}
+
+.floating-domain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 10px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--gray-700);
+  font-family: var(--font-mono);
+}
+
+.floating-domain-remove {
+  border: none;
+  background: transparent;
+  color: var(--gray-400);
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.floating-domain-remove:hover {
+  color: var(--red-600, #dc2626);
+  background: var(--gray-200);
+}
+
 @media (max-width: 600px) {
   .page {
     padding: 24px 14px 96px;

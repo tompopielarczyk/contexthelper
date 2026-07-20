@@ -127,6 +127,51 @@
             </div>
           </div>
         </section>
+
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Floating button</h2>
+              <p class="card-desc">A button that appears next to selected text and runs one pinned action</p>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="tooltip-settings-grid">
+              <div class="field">
+                <label class="field-label" for="floatingAction">Pinned action</label>
+                <select id="floatingAction" class="input input-select"></select>
+              </div>
+
+              <div class="field">
+                <label class="field-label" for="floatingEmoji">Button emoji</label>
+                <input type="text" id="floatingEmoji" class="input floating-emoji-input" maxlength="8" value="✨">
+              </div>
+
+              <div class="field">
+                <label class="field-label" for="floatingDelay">Delay after selecting</label>
+                <div class="range-input-group">
+                  <input type="range" id="floatingDelay" class="input-range" min="0" max="5000" value="800" step="100">
+                  <span id="floatingDelayValue" class="range-value">800 ms</span>
+                </div>
+              </div>
+
+              <div class="field">
+                <label class="field-label checkbox-label" for="floatingAllSites">
+                  <input type="checkbox" id="floatingAllSites">
+                  Activate on all sites
+                </label>
+                <span class="field-hint">Grants the extension permanent access to every website — the per-domain list below is the recommended mode.</span>
+              </div>
+            </div>
+
+            <div class="field floating-domains-field">
+              <label class="field-label">Enabled domains</label>
+              <div id="floatingDomainsList" class="floating-domains-list"></div>
+              <span class="field-hint">Add a site from the page itself: right-click → ContextHelper → "Floating button: enable/disable on this domain"</span>
+            </div>
+          </div>
+        </section>
       </div>
 
       <!-- Tab: Actions -->

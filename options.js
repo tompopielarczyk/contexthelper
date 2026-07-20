@@ -1,4 +1,4 @@
-import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId } from './lib/storage.js';
+import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId } from './lib/storage.js';
 import { getAvailableModels, getDefaultModel, callAI, getDeepLUsage, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
 import { testWebhook, requestWebhookPermission, requestWebhookPermissions, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 
@@ -26,11 +26,20 @@ const tooltipFontColorText = document.getElementById('tooltipFontColorText');
 const tooltipFontSize = document.getElementById('tooltipFontSize');
 const tooltipFontSizeValue = document.getElementById('tooltipFontSizeValue');
 const tooltipPosition = document.getElementById('tooltipPosition');
+const floatingAction = document.getElementById('floatingAction');
+const floatingEmoji = document.getElementById('floatingEmoji');
+const floatingDelay = document.getElementById('floatingDelay');
+const floatingDelayValue = document.getElementById('floatingDelayValue');
+const floatingAllSites = document.getElementById('floatingAllSites');
+const floatingDomainsList = document.getElementById('floatingDomainsList');
 const systemPromptInput = document.getElementById('systemPrompt');
 
 // ── State ───────────────────────────────────────────
 let draggedCard = null;
 let saveStatusTimeoutId = 0;
+let floatingAllSitesStored = false; // last persisted allSites value
+
+const ALL_SITE_ORIGINS = ['http://*/*', 'https://*/*'];
 
 const CUSTOM_MODEL_VALUE = '__custom__';
 const SHORTCUT_SLOTS = ['1', '2', '3', '4'];
@@ -134,6 +143,27 @@ async function init() {
 
   addActionBtn.addEventListener('click', () => {
     addActionCard({ name: '', template: '{{text}}', displayMode: 'auto', modelConfigId: '', targetLang: '', shortcutSlot: '' });
+  });
+
+  // Floating button (domains are owned by the page context-menu toggle)
+  const fb = settings.floatingButtonSettings || getDefaultFloatingButtonSettings();
+  floatingAllSitesStored = fb.allSites;
+  floatingEmoji.value = fb.emoji;
+  floatingDelay.value = fb.delayMs;
+  floatingDelayValue.textContent = `${fb.delayMs} ms`;
+  floatingAllSites.checked = fb.allSites;
+  refreshFloatingActionSelect(fb.actionId || '');
+  renderFloatingDomains(fb.domains);
+  syncFloatingDomainsDim();
+
+  floatingDelay.addEventListener('input', () => {
+    floatingDelayValue.textContent = `${floatingDelay.value} ms`;
+  });
+  floatingAllSites.addEventListener('change', syncFloatingDomainsDim);
+  // Re-populate from the live action cards right before the dropdown opens,
+  // so freshly added/renamed (unsaved) actions are pickable too.
+  floatingAction.addEventListener('mousedown', () => {
+    refreshFloatingActionSelect(floatingAction.value);
   });
 
   // chrome:// URLs are blocked as plain anchors — open via tabs API
@@ -729,6 +759,70 @@ function onDrop(e) {
   }
 }
 
+// ── Floating Button ─────────────────────────────────
+function refreshFloatingActionSelect(selectedId) {
+  floatingAction.textContent = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '(no action pinned)';
+  floatingAction.appendChild(none);
+  for (const action of collectActions()) {
+    const opt = document.createElement('option');
+    opt.value = action.id;
+    opt.textContent = action.name;
+    if (action.id === selectedId) opt.selected = true;
+    floatingAction.appendChild(opt);
+  }
+}
+
+function renderFloatingDomains(domains) {
+  floatingDomainsList.textContent = '';
+  if (!domains?.length) {
+    const empty = document.createElement('span');
+    empty.className = 'floating-domains-empty';
+    empty.textContent = 'No domains enabled yet';
+    floatingDomainsList.appendChild(empty);
+    return;
+  }
+  for (const host of domains) {
+    const chip = document.createElement('span');
+    chip.className = 'floating-domain-chip';
+    const name = document.createElement('span');
+    name.textContent = host;
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'floating-domain-remove';
+    removeBtn.title = `Remove ${host}`;
+    removeBtn.textContent = '✕';
+    removeBtn.addEventListener('click', () => removeFloatingDomain(host));
+    chip.appendChild(name);
+    chip.appendChild(removeBtn);
+    floatingDomainsList.appendChild(chip);
+  }
+}
+
+// Applied immediately (not on Save) — mirrors the page context-menu toggle,
+// which also writes straight to storage.
+async function removeFloatingDomain(host) {
+  const { floatingButtonSettings: fb, webhooks } = await getSettings();
+  const domains = (fb.domains || []).filter(d => d !== host);
+  await saveSettings({ floatingButtonSettings: { ...fb, domains } });
+  const usedByWebhook = (webhooks || []).some(w => {
+    try { return new URL(w.url).hostname.toLowerCase() === host; } catch { return false; }
+  });
+  if (!usedByWebhook) {
+    try {
+      await chrome.permissions.remove({ origins: [`https://${host}/*`, `http://${host}/*`] });
+    } catch { /* keep the grant */ }
+  }
+  renderFloatingDomains(domains);
+}
+
+function syncFloatingDomainsDim() {
+  document.querySelector('.floating-domains-field')
+    .classList.toggle('dimmed', floatingAllSites.checked);
+}
+
 // ── Restore Defaults ────────────────────────────────
 function onRestoreDefaults() {
   if (confirm('Restore default actions? Current actions will be replaced.')) {
@@ -748,9 +842,16 @@ async function onSave() {
   // await) — otherwise the first tooltip send would fail with a network error.
   const permissionsPromise = requestWebhookPermissions(webhooks.map(w => w.url).filter(Boolean));
 
-  // width/height are owned by the tooltip's resize handle (content.js), not by
-  // this form — re-read them fresh so saving options doesn't reset the size.
-  const { tooltipSettings: currentTs } = await getSettings();
+  // The all-sites grant needs the same gesture — request before any await too.
+  const wantAllSites = floatingAllSites.checked;
+  const allSitesPromise = wantAllSites && !floatingAllSitesStored
+    ? chrome.permissions.request({ origins: ALL_SITE_ORIGINS }).catch(() => false)
+    : Promise.resolve(true);
+
+  // width/height are owned by the tooltip's resize handle (content.js), and
+  // domains by the page context-menu toggle — re-read them fresh so saving
+  // options doesn't reset them.
+  const { tooltipSettings: currentTs, floatingButtonSettings: currentFb } = await getSettings();
 
   const tooltipSettings = {
     bgColor: tooltipBgColor.value,
@@ -761,10 +862,31 @@ async function onSave() {
     height: currentTs.height
   };
 
+  const allSitesGranted = await allSitesPromise;
+  if (!allSitesGranted) floatingAllSites.checked = false;
+
+  const floatingButtonSettings = {
+    delayMs: parseInt(floatingDelay.value, 10),
+    actionId: floatingAction.value || null,
+    emoji: floatingEmoji.value,
+    domains: currentFb.domains,
+    allSites: wantAllSites && allSitesGranted
+  };
+
   try {
-    await saveSettings({ modelConfigs, webhooks, actions, tooltipSettings, systemPrompt, darkMode });
+    await saveSettings({ modelConfigs, webhooks, actions, tooltipSettings, floatingButtonSettings, systemPrompt, darkMode });
+    if (floatingAllSitesStored && !floatingButtonSettings.allSites) {
+      // Untoggled — hand the broad grant back (per-origin webhook/domain
+      // grants are separate entries and stay untouched)
+      try { await chrome.permissions.remove({ origins: ALL_SITE_ORIGINS }); } catch { /* keep the grant */ }
+    }
+    floatingAllSitesStored = floatingButtonSettings.allSites;
+    syncFloatingDomainsDim();
     const granted = await permissionsPromise;
-    showSaveStatus(granted ? 'Saved' : 'Saved — webhook origin permission not granted, sending will fail', granted);
+    const warnings = [];
+    if (!granted) warnings.push('webhook origin permission not granted, sending will fail');
+    if (wantAllSites && !allSitesGranted) warnings.push('all-sites permission denied — floating button stays per-domain');
+    showSaveStatus(warnings.length ? `Saved — ${warnings.join('; ')}` : 'Saved', warnings.length === 0);
   } catch (err) {
     await permissionsPromise.catch(() => {});
     showSaveStatus(err.message, false);
