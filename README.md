@@ -81,7 +81,3 @@ Run the tests with:
 ```
 npm test
 ```
-
-## Contributing
-
-Issues and PRs welcome: [github.com/tompopielarczyk/contexthelper/issues](https://github.com/tompopielarczyk/contexthelper/issues)
