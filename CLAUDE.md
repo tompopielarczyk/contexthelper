@@ -115,6 +115,8 @@ A third trigger path besides the context menu and keyboard shortcuts: select tex
 
 `options.html` is organized into 4 tabs (`Models | Webhooks | Appearance | Actions`). Each tab is a `<div class="tab-panel" data-tab="...">`; the System prompt sits inside the Actions tab as a separate card. `initTabs()` in `options.js` toggles `.active` and the `hidden` attribute on click. To add another tab: drop a `<button class="tab-btn" data-tab="X">` in the nav and a matching `<div class="tab-panel" data-tab="X" hidden>` in `<main>` — no JS change needed.
 
+**`[hidden]` pitfall** — any element whose class sets `display:` (e.g. `.field-hint`, `.emoji-picker`) silently defeats the UA's `[hidden] { display: none }` rule, so `el.hidden = true` does nothing. Every such class needs an explicit `.the-class[hidden] { display: none }` override in `options.css` (bitten twice: emoji picker, model warning hint).
+
 ### Adding a new AI provider
 
 1. Add provider ID to `VALID_PROVIDERS` in `lib/storage.js`
