@@ -144,7 +144,11 @@
 
               <div class="field">
                 <label class="field-label" for="floatingEmoji">Button emoji</label>
-                <input type="text" id="floatingEmoji" class="input floating-emoji-input" maxlength="8" value="✨">
+                <div class="emoji-input-group">
+                  <input type="text" id="floatingEmoji" class="input floating-emoji-input" maxlength="8" value="✨">
+                  <button type="button" id="floatingEmojiPickerBtn" class="btn btn-secondary emoji-picker-btn" title="Pick an emoji">😀</button>
+                  <div id="floatingEmojiPicker" class="emoji-picker" hidden></div>
+                </div>
               </div>
 
               <div class="field">

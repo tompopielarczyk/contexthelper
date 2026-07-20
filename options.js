@@ -30,6 +30,8 @@ const floatingAction = document.getElementById('floatingAction');
 const floatingEmoji = document.getElementById('floatingEmoji');
 const floatingBgColor = document.getElementById('floatingBgColor');
 const floatingBgColorText = document.getElementById('floatingBgColorText');
+const floatingEmojiPickerBtn = document.getElementById('floatingEmojiPickerBtn');
+const floatingEmojiPicker = document.getElementById('floatingEmojiPicker');
 const floatingDelay = document.getElementById('floatingDelay');
 const floatingDelayValue = document.getElementById('floatingDelayValue');
 const floatingAllSites = document.getElementById('floatingAllSites');
@@ -177,6 +179,7 @@ async function init() {
   floatingAction.addEventListener('mousedown', () => {
     refreshFloatingActionSelect(floatingAction.value);
   });
+  initEmojiPicker();
 
   // chrome:// URLs are blocked as plain anchors — open via tabs API
   document.getElementById('openShortcutsPage').addEventListener('click', () => {
@@ -772,6 +775,44 @@ function onDrop(e) {
 }
 
 // ── Floating Button ─────────────────────────────────
+// Curated set — the text input still accepts any pasted emoji
+const FLOATING_EMOJI_CHOICES = [
+  '✨', '🌐', '🔤', '📝', '✏️', '🖊️', '📖', '📚',
+  '🧠', '🤖', '💬', '🗨️', '💡', '🔍', '🔎', '🎯',
+  '⚡', '🚀', '🔧', '🛠️', '📋', '📌', '⭐', '❤️',
+  '🔥', '✅', '❓', '❗', '➡️', '🔁', '🌍', '🗣️',
+  '👁️', '🧪', '🧾', '🧹', '🎓', '🪄', '📤', '🎨'
+];
+
+function initEmojiPicker() {
+  for (const emoji of FLOATING_EMOJI_CHOICES) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'emoji-picker-item';
+    item.textContent = emoji;
+    item.addEventListener('click', () => {
+      floatingEmoji.value = emoji;
+      floatingEmojiPicker.hidden = true;
+    });
+    floatingEmojiPicker.appendChild(item);
+  }
+
+  floatingEmojiPickerBtn.addEventListener('click', () => {
+    floatingEmojiPicker.hidden = !floatingEmojiPicker.hidden;
+  });
+
+  document.addEventListener('click', (e) => {
+    if (floatingEmojiPicker.hidden) return;
+    if (!floatingEmojiPicker.contains(e.target) && !floatingEmojiPickerBtn.contains(e.target)) {
+      floatingEmojiPicker.hidden = true;
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') floatingEmojiPicker.hidden = true;
+  });
+}
+
 function refreshFloatingActionSelect(selectedId) {
   floatingAction.textContent = '';
   const none = document.createElement('option');
