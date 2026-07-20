@@ -40,8 +40,9 @@ Three message types flow via `chrome.tabs.sendMessage`:
 - `AI_RESULT` — carries `text`, `editable`, `displayMode`, `tooltipSettings`, plus `webhooks` (`[{id, name}]` — names only, no secrets) and `webhookData` (payload fields for a manual webhook send)
 - `AI_ERROR` — carries `message`, `tooltipSettings`
 
-One message type flows the other way (content script → background, `chrome.runtime.sendMessage`):
+Two message types flow the other way (content script → background, `chrome.runtime.sendMessage`):
 - `SEND_WEBHOOK` — carries `webhookId` + `webhookData`; the background resolves the webhook from storage, renders its payload template, delivers it, and answers `{ok}` or `{ok: false, error}` via `sendResponse`
+- `RUN_ACTION` — carries `actionId` + `selectionText` + `editable` (sent by the floating selection button); the background resolves the action from settings and calls the shared `runAction`
 
 `sendToTab()` in `background.js` silently catches errors when the content script isn't loaded (restricted pages like `chrome://`).
 
@@ -53,7 +54,7 @@ One message type flows the other way (content script → background, `chrome.run
 
 **Shadow DOM isolation** — all UI (tooltip, spinner) lives inside a closed Shadow DOM attached to a host `div`. This prevents host page styles from leaking in. `content.css` resets the host element (`all: initial !important`), while internal styles are injected via `getShadowStyles()` into the shadow root. Keep both in sync — `content.css` protects against host-page interference, `getShadowStyles()` defines the actual component styles.
 
-**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey }`) and `webhooks` (array of `{ id, name, url, method, headers, template }`) — both contain secrets and are not synced to Google account. `chrome.storage.sync` holds `actions`, `tooltipSettings`, `systemPrompt`, `darkMode`. Actions reference model configs via `modelConfigId`; webhooks are a global list, not bound to actions (a legacy `webhookId` field on actions is stripped on read and write). The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
+**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey }`) and `webhooks` (array of `{ id, name, url, method, headers, template }`) — both contain secrets and are not synced to Google account. `chrome.storage.sync` holds `actions`, `tooltipSettings`, `floatingButtonSettings`, `systemPrompt`, `darkMode`. Actions reference model configs via `modelConfigId`; webhooks are a global list, not bound to actions (a legacy `webhookId` field on actions is stripped on read and write). The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
 
 **Migration** — `getSettings()` auto-migrates two legacy schemas: (1) old single-provider data (separate `provider`, `model`, `apiKey` fields) into a `modelConfigs` array on first access — idempotent via `modelConfigs === null` check, creates one config from old fields, assigns it to all actions, cleans up old keys. (2) Legacy boolean `darkMode` is mapped to the tri-state form: `true` → `'dark'`, `false` → `'auto'`. New installs default to `'auto'`, which follows `prefers-color-scheme` via `matchMedia` (re-applied on system theme change while in `'auto'`).
 
@@ -97,6 +98,16 @@ Permissions are granted **per-origin at runtime** via `chrome.permissions.reques
 `chrome.commands` are static (declared in `manifest.json`) — Chrome does not allow per-action dynamic commands. The extension declares 4 fixed slots `run-action-1..4` (suggested defaults Ctrl+Shift+1..4; on macOS only slots 1–2 get suggestions since Cmd+Shift+3/4 are system screenshots). Each action has a `shortcutSlot: '' | '1'..'4'` field (sync storage); the options action card has a `.action-shortcut` select whose labels show the live key combos from `chrome.commands.getAll()`. Slot uniqueness: auto-steal in the options DOM (radio-like) + duplicate rejection in `saveSettings`.
 
 Trigger path: `chrome.commands.onCommand → handleCommand` in `background.js` — maps the command to the action via `shortcutSlot`, reads the selection from the page with `getSelectionFromTab` (`chrome.scripting.executeScript`), then calls the shared `runAction`. Empty selection shows a "Select some text first" tooltip (requires the `AI_PROCESSING_START` + `AI_ERROR` pair — content.js gates `AI_ERROR` on the requestId set by START). Restricted pages are a silent no-op. Context-menu titles append the current combo (e.g. "Translate to English (Ctrl+Shift+1)"), refreshed on every menu rebuild. Key combos themselves live in Chrome (`chrome://extensions/shortcuts`), not in extension storage — the options footer links there via `chrome.tabs.create` (plain anchors to chrome:// are blocked).
+
+### Floating selection button
+
+A third trigger path besides the context menu and keyboard shortcuts: select text → after `delayMs` an emoji pill fades in near the end of the selection → hover expands the pinned action's name → click sends `RUN_ACTION` to the background, which runs the standard `runAction` flow.
+
+**Per-domain opt-in** — the feature requires a content script present *before* any action runs, but the extension must not demand all-sites access. The page context menu ("Floating button: enable/disable on this domain", shown on `page` + `selection` contexts) requests the host permission for that single domain (`chrome.permissions.request` inside the click gesture) and toggles the hostname in `floatingButtonSettings.domains`. `syncFloatingButtonRegistration()` in `background.js` keeps a dynamically registered content script (`chrome.scripting.registerContentScripts`, id `contexthelper-floating`, `persistAcrossSessions`) in step with that list — called from `storage.onChanged`, `onInstalled` and `onStartup` (self-healing; skips origins whose grant was revoked). Empty list + `allSites: false` = script unregistered, zero footprint.
+
+**All-sites toggle** — the options card also offers `allSites`: enabling requests the broad `http://*/*` + `https://*/*` grant within the Save click gesture (denied → toggle reverts); disabling removes the broad grant (per-origin webhook/domain grants are separate entries and survive) and re-registers for the domain list only. Already-loaded tabs stop showing the button immediately via `storage.onChanged` in the content script, though the injected script itself lives until reload.
+
+**Appearance rules** (content.js) — button shows only for selections of ≥3 chars outside editable contexts (input/textarea/contenteditable); `selectionchange` + `mouseup` re-arm a `delayMs` timer, so it appears once the selection is stable. Hides on: deselect, outside mousedown, Esc, scroll, and `AI_PROCESSING_START`. The button element (`.cmn-float-btn`) deliberately lacks the `.cmn-overlay` class and has its own cleanup list (`floatingCleanups`) — `hideOverlay()` must not remove it, and vice versa. `floatingButtonSettings` (`{ delayMs, actionId, emoji, domains, allSites }`, sync storage, sanitized in `lib/storage.js`) is read at injection and refreshed live via `storage.onChanged`.
 
 ### Options page tabs
 
