@@ -1035,6 +1035,11 @@ body.dark .webhook-card:hover {
   color: var(--orange-600);
 }
 
+/* .field-hint's display:block beats the UA [hidden] rule — restore it */
+.field-hint[hidden] {
+  display: none;
+}
+
 .model-config-model-hint,
 .model-config-model-warn {
   text-align: right;
