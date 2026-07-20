@@ -967,13 +967,18 @@ async function onSave() {
 
   // The all-sites grant/cleanup needs the same gesture — start before any
   // await too. Removing the broad https://*/* grant SUBTRACTS everything it
-  // contains from the active permission set, INCLUDING the required API
-  // host_permissions from the manifest (Chromium collapses pattern sets) —
-  // fetches then hit CORS as if the extension had no host access. The repair:
-  // re-request the manifest hosts right after the remove. They are still in
-  // the granted set, so this never prompts; it runs on every save as a
-  // self-heal for profiles already affected.
+  // contains from the active/granted permission sets, INCLUDING the required
+  // API host_permissions from the manifest AND the per-domain opt-in grants
+  // (Chromium collapses pattern sets) — fetches then hit CORS and the button
+  // dies on listed domains. The repair: one combined re-request of the
+  // manifest hosts plus every listed domain right after the remove (a single
+  // prompt at most; silent when everything is still granted). It runs on
+  // every save as a self-heal for profiles already affected.
   const wantAllSites = floatingAllSites.checked;
+  // Domains read from the rendered chips — the storage read comes only after
+  // an await, which would forfeit the click gesture
+  const domainOrigins = [...floatingDomainsList.querySelectorAll('.floating-domain-chip > span:first-child')]
+    .flatMap(el => [`https://${el.textContent}/*`, `http://${el.textContent}/*`]);
   const allSitesPromise = (async () => {
     let granted = true;
     if (wantAllSites && !floatingAllSitesStored) {
@@ -981,8 +986,9 @@ async function onSave() {
     } else if (!wantAllSites && floatingAllSitesStored) {
       await chrome.permissions.remove({ origins: ALL_SITE_ORIGINS }).catch(() => { /* keep the grant */ });
     }
-    await chrome.permissions.request({ origins: chrome.runtime.getManifest().host_permissions })
-      .catch(() => { /* gesture consumed by a prompt above — next save repairs */ });
+    await chrome.permissions.request({
+      origins: [...chrome.runtime.getManifest().host_permissions, ...domainOrigins]
+    }).catch(() => { /* gesture consumed by a prompt above — next save repairs */ });
     return granted;
   })();
 

@@ -43,6 +43,12 @@ onSettingsChanged(() => {
   syncFloatingButtonRegistration();
 });
 
+// Registration filters matches through permissions.contains, so it must also
+// follow grant changes (e.g. the options page re-requesting subtracted
+// origins after an all-sites untoggle, or a revoke via chrome://extensions)
+chrome.permissions.onAdded.addListener(() => syncFloatingButtonRegistration());
+chrome.permissions.onRemoved.addListener(() => syncFloatingButtonRegistration());
+
 async function rebuildContextMenu() {
   _menuRebuildQueue = _menuRebuildQueue.catch(() => {}).then(rebuildContextMenuNow);
   return _menuRebuildQueue;
