@@ -1033,24 +1033,95 @@ body.dark .webhook-card:hover {
   cursor: pointer;
 }
 
-/* Centered, non-interactive live preview of the on-page pill */
-.floating-preview-row {
-  display: flex;
-  justify-content: center;
-  margin: 8px 0 14px;
+/* Preview scene: sample paragraph with a fake selection, the live pill sits
+   right after it — the button shown in its natural on-page context */
+.floating-scene {
+  padding: 18px 20px;
+  margin-bottom: 6px;
+  background: var(--gray-50);
+  border: 1px dashed var(--gray-200);
+  border-radius: var(--radius-sm);
 }
 
-/* Emoji trigger + color swatches share one centered row below the preview */
-.floating-appearance-controls {
+.floating-scene-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 2;
+  color: var(--gray-500);
+}
+
+.floating-scene-selection {
+  background: rgba(59, 130, 246, 0.28);
+  color: inherit;
+  border-radius: 2px;
+  padding: 2px 1px;
+}
+
+.floating-preview-anchor {
+  display: inline-block;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+/* Settings as descriptive rows: label + one-line description | control */
+.setting-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.setting-row:last-of-type {
+  border-bottom: none;
+}
+
+.setting-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setting-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-800);
+}
+
+.setting-desc {
+  font-size: 12px;
+  color: var(--gray-400);
+}
+
+.setting-select {
+  width: auto;
+  min-width: 200px;
+  max-width: 260px;
+}
+
+.setting-range {
+  width: 260px;
+  flex-shrink: 0;
+}
+
+.setting-toggle {
+  accent-color: var(--orange-500);
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
 .floating-emoji-wrap {
   position: relative;
   display: inline-block;
+}
+
+/* The trigger sits at the row's right edge — open the grid right-aligned */
+.floating-emoji-wrap .emoji-picker {
+  left: auto;
+  right: 0;
 }
 
 .floating-emoji-btn {

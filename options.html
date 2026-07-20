@@ -136,45 +136,58 @@
           </div>
 
           <div class="card-body">
-            <div class="tooltip-settings-grid">
-              <div class="field">
-                <label class="field-label" for="floatingAction">Pinned action</label>
-                <select id="floatingAction" class="input input-select"></select>
-              </div>
+            <!-- Live preview in context: sample text with a "selection" and the button next to it -->
+            <div class="floating-scene">
+              <p class="floating-scene-text">
+                Lorem ipsum dolor sit amet, <mark class="floating-scene-selection">consectetur adipiscing elit</mark><span class="floating-preview-anchor"><span id="floatingPreview" class="floating-preview"><span id="floatingPreviewEmoji">✨</span><span id="floatingPreviewLabel" class="floating-preview-label"></span></span></span>, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+              </p>
+            </div>
 
-              <div class="field">
-                <label class="field-label" for="floatingDelay">Delay after selecting</label>
-                <div class="range-input-group">
-                  <input type="range" id="floatingDelay" class="input-range" min="0" max="5000" value="800" step="100">
-                  <span id="floatingDelayValue" class="range-value">800 ms</span>
-                </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <label class="setting-label" for="floatingAction">Action</label>
+                <span class="setting-desc">Runs when you click the button</span>
               </div>
+              <select id="floatingAction" class="input input-select setting-select"></select>
+            </div>
 
-              <div class="field floating-appearance-field">
-                <label class="field-label">Button appearance</label>
-                <div class="floating-preview-row">
-                  <div id="floatingPreview" class="floating-preview">
-                    <span id="floatingPreviewEmoji">✨</span>
-                    <span id="floatingPreviewLabel" class="floating-preview-label"></span>
-                  </div>
-                </div>
-                <div class="floating-appearance-controls">
-                  <div class="floating-emoji-wrap">
-                    <button type="button" id="floatingEmojiBtn" class="btn btn-secondary floating-emoji-btn" title="Pick an emoji">✨</button>
-                    <div id="floatingEmojiPicker" class="emoji-picker" hidden></div>
-                  </div>
-                  <div id="floatingSwatches" class="floating-swatches"></div>
-                </div>
-                <input type="color" id="floatingBgColor" class="swatch-color-input" value="#ffffff" tabindex="-1" aria-hidden="true">
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">Emoji</span>
+                <span class="setting-desc">The button's icon</span>
               </div>
+              <div class="floating-emoji-wrap">
+                <button type="button" id="floatingEmojiBtn" class="btn btn-secondary floating-emoji-btn" title="Pick an emoji">✨</button>
+                <div id="floatingEmojiPicker" class="emoji-picker" hidden></div>
+              </div>
+            </div>
 
-              <div class="field">
-                <label class="field-label checkbox-label" for="floatingAllSites">
-                  <input type="checkbox" id="floatingAllSites">
-                  Activate on all sites
-                </label>
-                <span class="field-hint">Grants the extension permanent access to every website — the per-domain list below is the recommended mode.</span>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">Background</span>
+                <span class="setting-desc">Button color on the page</span>
               </div>
+              <div id="floatingSwatches" class="floating-swatches"></div>
+              <input type="color" id="floatingBgColor" class="swatch-color-input" value="#ffffff" tabindex="-1" aria-hidden="true">
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <label class="setting-label" for="floatingDelay">Delay</label>
+                <span class="setting-desc">Wait after selecting before the button appears</span>
+              </div>
+              <div class="range-input-group setting-range">
+                <input type="range" id="floatingDelay" class="input-range" min="0" max="5000" value="800" step="100">
+                <span id="floatingDelayValue" class="range-value">800 ms</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <label class="setting-label" for="floatingAllSites">All sites</label>
+                <span class="setting-desc">Grants permanent access to every website — the per-domain list below is the recommended mode</span>
+              </div>
+              <input type="checkbox" id="floatingAllSites" class="setting-toggle">
             </div>
 
             <div class="field floating-domains-field">
