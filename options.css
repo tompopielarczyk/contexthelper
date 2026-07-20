@@ -580,7 +580,8 @@ body {
 }
 
 /* ── Tooltip Settings ─────────────────────────────── */
-/* Mini result tooltip inside the preview scene — styled like .cmn-tooltip */
+/* Mini result tooltip inside the preview scene — styled like .cmn-tooltip.
+   The pos-* class (from the Position select) moves it around the selection. */
 .tooltip-preview {
   max-width: 340px;
   margin: 12px 0 0 24px;
@@ -592,6 +593,40 @@ body {
   border: 1px solid var(--gray-200);
   border-radius: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  transition: margin 0.15s ease;
+}
+
+/* The scene is a column so `order` can flip the preview above the text */
+.floating-scene {
+  display: flex;
+  flex-direction: column;
+}
+
+.tooltip-preview.pos-above {
+  order: -1;
+  margin: 0 0 12px 24px;
+}
+
+/* left/right: text and preview side by side */
+.floating-scene.scene-horizontal {
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+}
+
+.scene-horizontal .floating-scene-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.scene-horizontal .tooltip-preview {
+  margin: 0;
+  max-width: 220px;
+  flex-shrink: 0;
+}
+
+.tooltip-preview.pos-left {
+  order: -1;
 }
 
 .range-input-group {

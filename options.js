@@ -100,6 +100,7 @@ async function init() {
     tooltipFontSizeValue.textContent = `${tooltipFontSize.value}px`;
     updateTooltipPreview();
   });
+  tooltipPosition.addEventListener('change', updateTooltipPreview);
 
   // System prompt
   systemPromptInput.value = settings.systemPrompt ?? getDefaultSystemPrompt();
@@ -771,11 +772,16 @@ const FLOATING_BG_PRESETS = ['#ffffff', '#f3f4f6', '#1f2937', '#f97316', '#fef3c
 const TOOLTIP_BG_PRESETS = FLOATING_BG_PRESETS;
 const TOOLTIP_FONT_PRESETS = ['#1f2937', '#374151', '#6b7280', '#f9fafb', '#ffffff', '#f97316'];
 
-// Live tooltip preview in the scene — same fields content.js applies on the page
+// Live tooltip preview in the scene — same fields content.js applies on the
+// page; the position select moves the preview around the fake selection
 function updateTooltipPreview() {
   tooltipPreview.style.background = tooltipBgColor.value;
   tooltipPreview.style.color = tooltipFontColor.value;
   tooltipPreview.style.fontSize = `${tooltipFontSize.value}px`;
+  const pos = tooltipPosition.value || 'below';
+  tooltipPreview.className = `tooltip-preview pos-${pos}`;
+  tooltipPreview.closest('.floating-scene')
+    .classList.toggle('scene-horizontal', pos === 'left' || pos === 'right');
 }
 
 // Live preview pill (click = emoji grid) + background swatches; state lives in
