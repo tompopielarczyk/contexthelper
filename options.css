@@ -597,6 +597,7 @@ body {
   border-radius: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
   transition: margin 0.15s ease;
+  animation: floating-preview-in 0.15s ease-out;
 }
 
 .tooltip-preview-close {

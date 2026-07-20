@@ -100,7 +100,14 @@ async function init() {
     tooltipFontSizeValue.textContent = `${tooltipFontSize.value}px`;
     updateTooltipPreview();
   });
-  tooltipPosition.addEventListener('change', updateTooltipPreview);
+  tooltipPosition.addEventListener('change', () => {
+    updateTooltipPreview();
+    // Re-appear at the new spot (order flips don't transition) — same
+    // restart-by-reflow trick as the floating preview
+    tooltipPreview.style.animation = 'none';
+    void tooltipPreview.offsetWidth;
+    tooltipPreview.style.animation = '';
+  });
 
   // System prompt
   systemPromptInput.value = settings.systemPrompt ?? getDefaultSystemPrompt();
