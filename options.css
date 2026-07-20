@@ -1094,6 +1094,11 @@ body.dark .webhook-card:hover {
   padding: 0;
 }
 
+/* display: grid would defeat the hidden attribute (author styles beat UA [hidden]) */
+.emoji-picker[hidden] {
+  display: none;
+}
+
 .emoji-picker {
   position: absolute;
   top: calc(100% + 6px);
