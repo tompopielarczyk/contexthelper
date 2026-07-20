@@ -1036,7 +1036,8 @@ body.dark .webhook-card:hover {
 /* Preview scene: sample paragraph with a fake selection, the live pill sits
    right after it — the button shown in its natural on-page context */
 .floating-scene {
-  padding: 18px 20px;
+  /* Extra bottom room for the absolutely-positioned pill under the selection */
+  padding: 18px 20px 34px;
   margin-bottom: 6px;
   background: var(--gray-50);
   border: 1px dashed var(--gray-200);
@@ -1057,10 +1058,18 @@ body.dark .webhook-card:hover {
   padding: 2px 1px;
 }
 
+/* Zero-size inline anchor at the end of the fake selection; the pill hangs
+   off it absolutely — floating OVER the text like the real fixed-position
+   button, so the hover expand never reflows the paragraph */
 .floating-preview-anchor {
-  display: inline-block;
-  margin-left: 8px;
-  vertical-align: middle;
+  position: relative;
+}
+
+.floating-preview-anchor .floating-preview {
+  position: absolute;
+  top: 0.9em;
+  left: 4px;
+  z-index: 5;
 }
 
 /* Settings as descriptive rows: label + one-line description | control */
