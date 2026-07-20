@@ -580,20 +580,62 @@ body {
 }
 
 /* ── Tooltip Settings ─────────────────────────────── */
-/* Mini result tooltip inside the preview scene — styled like .cmn-tooltip.
-   The pos-* class (from the Position select) moves it around the selection. */
+/* Mini result tooltip inside the preview scene — mirrors .cmn-tooltip from
+   content.js (close ✕, Copy button, resize grip). The pos-* class (from the
+   Position select) moves it around the selection; JS sets margin-left to the
+   fake selection's left edge for above/below. */
 .tooltip-preview {
+  position: relative;
   max-width: 340px;
-  margin: 12px 0 0 24px;
-  padding: 12px 14px;
+  margin: 12px 0 0;
+  padding: 14px;
   background: #fff;
   color: #1f2937;
   font-size: 14px;
   line-height: 1.5;
-  border: 1px solid var(--gray-200);
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
   transition: margin 0.15s ease;
+}
+
+.tooltip-preview-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: #9ca3af;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tooltip-preview-content {
+  padding-right: 20px;
+  margin-bottom: 10px;
+}
+
+.tooltip-preview-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tooltip-preview-copy {
+  background: #f97316;
+  color: #fff;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.tooltip-preview-grip {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 12px;
+  height: 12px;
+  opacity: 0.45;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  background: repeating-linear-gradient(135deg, currentColor 0 1.5px, transparent 1.5px 4.5px);
 }
 
 /* The scene is a column so `order` can flip the preview above the text */
@@ -604,7 +646,7 @@ body {
 
 .tooltip-preview.pos-above {
   order: -1;
-  margin: 0 0 12px 24px;
+  margin: 0 0 12px;
 }
 
 /* left/right: text and preview side by side */

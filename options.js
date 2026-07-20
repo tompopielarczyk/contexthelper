@@ -780,8 +780,19 @@ function updateTooltipPreview() {
   tooltipPreview.style.fontSize = `${tooltipFontSize.value}px`;
   const pos = tooltipPosition.value || 'below';
   tooltipPreview.className = `tooltip-preview pos-${pos}`;
-  tooltipPreview.closest('.floating-scene')
-    .classList.toggle('scene-horizontal', pos === 'left' || pos === 'right');
+  const scene = tooltipPreview.closest('.floating-scene');
+  scene.classList.toggle('scene-horizontal', pos === 'left' || pos === 'right');
+
+  // The real tooltip opens aligned with the selection's left edge — mirror
+  // that for above/below by indenting to the fake selection's position
+  if (pos === 'below' || pos === 'above') {
+    const mark = scene.querySelector('.floating-scene-selection');
+    const text = scene.querySelector('.floating-scene-text');
+    const offset = Math.max(0, mark.getBoundingClientRect().left - text.getBoundingClientRect().left);
+    tooltipPreview.style.marginLeft = `${offset}px`;
+  } else {
+    tooltipPreview.style.marginLeft = '';
+  }
 }
 
 // Live preview pill (click = emoji grid) + background swatches; state lives in
