@@ -142,21 +142,17 @@
                 <select id="floatingAction" class="input input-select"></select>
               </div>
 
-              <div class="field">
-                <label class="field-label" for="floatingEmoji">Button emoji</label>
-                <div class="emoji-input-group">
-                  <input type="text" id="floatingEmoji" class="input floating-emoji-input" maxlength="8" value="✨">
-                  <button type="button" id="floatingEmojiPickerBtn" class="btn btn-secondary emoji-picker-btn" title="Pick an emoji">😀</button>
+              <div class="field floating-appearance-field">
+                <label class="field-label">Button appearance</label>
+                <div class="floating-preview-wrap">
+                  <button type="button" id="floatingPreview" class="floating-preview" title="Click to change the emoji">
+                    <span id="floatingPreviewEmoji">✨</span>
+                    <span id="floatingPreviewLabel" class="floating-preview-label"></span>
+                  </button>
                   <div id="floatingEmojiPicker" class="emoji-picker" hidden></div>
                 </div>
-              </div>
-
-              <div class="field">
-                <label class="field-label" for="floatingBgColor">Button background</label>
-                <div class="color-input-group">
-                  <input type="color" id="floatingBgColor" class="input-color" value="#ffffff">
-                  <input type="text" id="floatingBgColorText" class="input input-color-text" value="#ffffff" maxlength="7" placeholder="#ffffff">
-                </div>
+                <div id="floatingSwatches" class="floating-swatches"></div>
+                <input type="color" id="floatingBgColor" class="swatch-color-input" value="#ffffff" tabindex="-1" aria-hidden="true">
               </div>
 
               <div class="field">

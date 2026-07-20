@@ -27,11 +27,12 @@ const tooltipFontSize = document.getElementById('tooltipFontSize');
 const tooltipFontSizeValue = document.getElementById('tooltipFontSizeValue');
 const tooltipPosition = document.getElementById('tooltipPosition');
 const floatingAction = document.getElementById('floatingAction');
-const floatingEmoji = document.getElementById('floatingEmoji');
 const floatingBgColor = document.getElementById('floatingBgColor');
-const floatingBgColorText = document.getElementById('floatingBgColorText');
-const floatingEmojiPickerBtn = document.getElementById('floatingEmojiPickerBtn');
 const floatingEmojiPicker = document.getElementById('floatingEmojiPicker');
+const floatingPreview = document.getElementById('floatingPreview');
+const floatingPreviewEmoji = document.getElementById('floatingPreviewEmoji');
+const floatingPreviewLabel = document.getElementById('floatingPreviewLabel');
+const floatingSwatches = document.getElementById('floatingSwatches');
 const floatingDelay = document.getElementById('floatingDelay');
 const floatingDelayValue = document.getElementById('floatingDelayValue');
 const floatingAllSites = document.getElementById('floatingAllSites');
@@ -42,6 +43,8 @@ const systemPromptInput = document.getElementById('systemPrompt');
 let draggedCard = null;
 let saveStatusTimeoutId = 0;
 let floatingAllSitesStored = false; // last persisted allSites value
+let floatingEmojiValue = '✨';      // button appearance state (no form inputs)
+let floatingBgValue = '#ffffff';
 
 const ALL_SITE_ORIGINS = ['http://*/*', 'https://*/*'];
 
@@ -152,26 +155,16 @@ async function init() {
   // Floating button (domains are owned by the page context-menu toggle)
   const fb = settings.floatingButtonSettings || getDefaultFloatingButtonSettings();
   floatingAllSitesStored = fb.allSites;
-  floatingEmoji.value = fb.emoji;
-  floatingBgColor.value = fb.bgColor;
-  floatingBgColorText.value = fb.bgColor;
   floatingDelay.value = fb.delayMs;
   floatingDelayValue.textContent = `${fb.delayMs} ms`;
   floatingAllSites.checked = fb.allSites;
   refreshFloatingActionSelect(fb.actionId || '');
   renderFloatingDomains(fb.domains);
   syncFloatingDomainsDim();
+  initFloatingAppearance(fb);
 
   floatingDelay.addEventListener('input', () => {
     floatingDelayValue.textContent = `${floatingDelay.value} ms`;
-  });
-  floatingBgColor.addEventListener('input', () => {
-    floatingBgColorText.value = floatingBgColor.value;
-  });
-  floatingBgColorText.addEventListener('input', () => {
-    if (/^#[0-9a-fA-F]{6}$/.test(floatingBgColorText.value)) {
-      floatingBgColor.value = floatingBgColorText.value;
-    }
   });
   floatingAllSites.addEventListener('change', syncFloatingDomainsDim);
   // Re-populate from the live action cards right before the dropdown opens,
@@ -179,7 +172,7 @@ async function init() {
   floatingAction.addEventListener('mousedown', () => {
     refreshFloatingActionSelect(floatingAction.value);
   });
-  initEmojiPicker();
+  floatingAction.addEventListener('change', updateFloatingPreview);
 
   // chrome:// URLs are blocked as plain anchors — open via tabs API
   document.getElementById('openShortcutsPage').addEventListener('click', () => {
@@ -775,7 +768,6 @@ function onDrop(e) {
 }
 
 // ── Floating Button ─────────────────────────────────
-// Curated set — the text input still accepts any pasted emoji
 const FLOATING_EMOJI_CHOICES = [
   '✨', '🌐', '🔤', '📝', '✏️', '🖊️', '📖', '📚',
   '🧠', '🤖', '💬', '🗨️', '💡', '🔍', '🔎', '🎯',
@@ -784,26 +776,35 @@ const FLOATING_EMOJI_CHOICES = [
   '👁️', '🧪', '🧾', '🧹', '🎓', '🪄', '📤', '🎨'
 ];
 
-function initEmojiPicker() {
+const FLOATING_BG_PRESETS = ['#ffffff', '#f3f4f6', '#1f2937', '#f97316', '#fef3c7', '#dbeafe', '#dcfce7'];
+
+// Live preview pill (click = emoji grid) + background swatches; state lives in
+// floatingEmojiValue/floatingBgValue, no form inputs.
+function initFloatingAppearance(fb) {
+  floatingEmojiValue = fb.emoji;
+  floatingBgValue = fb.bgColor;
+  floatingBgColor.value = fb.bgColor;
+
   for (const emoji of FLOATING_EMOJI_CHOICES) {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'emoji-picker-item';
     item.textContent = emoji;
     item.addEventListener('click', () => {
-      floatingEmoji.value = emoji;
+      floatingEmojiValue = emoji;
       floatingEmojiPicker.hidden = true;
+      updateFloatingPreview();
     });
     floatingEmojiPicker.appendChild(item);
   }
 
-  floatingEmojiPickerBtn.addEventListener('click', () => {
+  floatingPreview.addEventListener('click', () => {
     floatingEmojiPicker.hidden = !floatingEmojiPicker.hidden;
   });
 
   document.addEventListener('click', (e) => {
     if (floatingEmojiPicker.hidden) return;
-    if (!floatingEmojiPicker.contains(e.target) && !floatingEmojiPickerBtn.contains(e.target)) {
+    if (!floatingEmojiPicker.contains(e.target) && !floatingPreview.contains(e.target)) {
       floatingEmojiPicker.hidden = true;
     }
   });
@@ -811,6 +812,55 @@ function initEmojiPicker() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') floatingEmojiPicker.hidden = true;
   });
+
+  for (const color of FLOATING_BG_PRESETS) {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'floating-swatch';
+    swatch.dataset.color = color;
+    swatch.style.background = color;
+    swatch.title = color;
+    swatch.addEventListener('click', () => setFloatingBg(color));
+    floatingSwatches.appendChild(swatch);
+  }
+
+  const custom = document.createElement('button');
+  custom.type = 'button';
+  custom.className = 'floating-swatch floating-swatch-custom';
+  custom.title = 'Custom color';
+  custom.addEventListener('click', () => floatingBgColor.click());
+  floatingSwatches.appendChild(custom);
+
+  floatingBgColor.addEventListener('input', () => setFloatingBg(floatingBgColor.value));
+
+  setFloatingBg(fb.bgColor);
+}
+
+function setFloatingBg(color) {
+  floatingBgValue = color;
+  floatingBgColor.value = color;
+  for (const swatch of floatingSwatches.querySelectorAll('.floating-swatch')) {
+    const isCustom = swatch.classList.contains('floating-swatch-custom');
+    const active = isCustom
+      ? !FLOATING_BG_PRESETS.includes(color)
+      : swatch.dataset.color === color;
+    swatch.classList.toggle('active', active);
+  }
+  updateFloatingPreview();
+}
+
+// Mirrors the content.js button: custom background inline + auto-contrast label
+function updateFloatingPreview() {
+  floatingPreviewEmoji.textContent = floatingEmojiValue || '✨';
+  const selected = floatingAction.options[floatingAction.selectedIndex];
+  floatingPreviewLabel.textContent = floatingAction.value && selected ? selected.textContent : 'no action';
+  floatingPreview.style.background = floatingBgValue;
+  const r = parseInt(floatingBgValue.slice(1, 3), 16);
+  const g = parseInt(floatingBgValue.slice(3, 5), 16);
+  const b = parseInt(floatingBgValue.slice(5, 7), 16);
+  const dark = 0.299 * r + 0.587 * g + 0.114 * b < 128;
+  floatingPreviewLabel.style.color = dark ? '#f9fafb' : '#374151';
+  floatingPreview.style.borderColor = dark ? 'rgba(255, 255, 255, 0.3)' : '';
 }
 
 function refreshFloatingActionSelect(selectedId) {
@@ -940,8 +990,8 @@ async function onSave() {
   const floatingButtonSettings = {
     delayMs: parseInt(floatingDelay.value, 10),
     actionId: floatingAction.value || null,
-    emoji: floatingEmoji.value,
-    bgColor: floatingBgColor.value,
+    emoji: floatingEmojiValue,
+    bgColor: floatingBgValue,
     domains: currentFb.domains,
     allSites: wantAllSites && allSitesGranted
   };

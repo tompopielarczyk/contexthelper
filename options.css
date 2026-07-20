@@ -1031,23 +1031,67 @@ body.dark .webhook-card:hover {
   cursor: pointer;
 }
 
-.floating-emoji-input {
-  width: 80px;
-  text-align: center;
-  font-size: 16px;
+.floating-preview-wrap {
+  position: relative;
+  display: inline-block;
 }
 
-.emoji-input-group {
-  position: relative;
-  display: flex;
+/* Live 1:1 preview of the on-page pill; click opens the emoji grid */
+.floating-preview {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-
-.emoji-picker-btn {
-  padding: 6px 10px;
+  padding: 7px 14px;
+  background: #fff;
+  border: 1px solid var(--gray-200);
+  border-radius: 999px;
   font-size: 15px;
   line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
+}
+
+.floating-preview:hover {
+  border-color: var(--gray-300);
+}
+
+.floating-preview-label {
+  font-size: 13px;
+  color: var(--gray-700);
+}
+
+.floating-swatches {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.floating-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--gray-300);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.floating-swatch.active {
+  outline: 2px solid var(--orange-500);
+  outline-offset: 2px;
+}
+
+.floating-swatch-custom {
+  background: conic-gradient(#f87171, #fbbf24, #4ade80, #60a5fa, #c084fc, #f87171);
+}
+
+/* Hidden native picker behind the custom swatch */
+.swatch-color-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  border: none;
+  padding: 0;
 }
 
 .emoji-picker {
