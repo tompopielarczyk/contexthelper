@@ -38,8 +38,10 @@ chrome.runtime.onStartup.addListener(() => {
   syncFloatingButtonRegistration();
 });
 
-onSettingsChanged(() => {
-  rebuildContextMenu();
+onSettingsChanged((changes) => {
+  // Only the action list feeds the menu — rebuilding on every sync write
+  // (tooltip resize, dark mode, …) would multiply the rebuild races
+  if (changes.actions) rebuildContextMenu();
   syncFloatingButtonRegistration();
 });
 
@@ -54,9 +56,26 @@ async function rebuildContextMenu() {
   return _menuRebuildQueue;
 }
 
+// contextMenus.create is the one call in the namespace that is not promisified:
+// it returns the id synchronously and reports failure only through
+// runtime.lastError inside the callback. Without this wrapper a rebuild
+// resolves while its items are still in flight, so the queue below would not
+// actually serialize anything and the next removeAll could be ordered against
+// half-committed items ("Cannot create item with duplicate id").
+function createMenuItem(props) {
+  return new Promise((resolve) => {
+    chrome.contextMenus.create(props, () => {
+      void chrome.runtime.lastError; // a later rebuild is authoritative
+      resolve();
+    });
+  });
+}
+
 async function rebuildContextMenuNow() {
   await chrome.contextMenus.removeAll();
 
+  // getSettings may write during migration, which fires onSettingsChanged and
+  // queues another rebuild — read before creating anything
   const { actions } = await getSettings();
   if (!actions?.length) return;
 
@@ -64,29 +83,29 @@ async function rebuildContextMenuNow() {
 
   // Parent also matches 'page' so the floating-button toggle is reachable
   // without a selection; action items stay selection-only.
-  chrome.contextMenus.create({
+  await createMenuItem({
     id: MENU_PARENT_ID,
     title: 'ContextHelper',
     contexts: ['selection', 'page']
   });
 
-  actions.forEach((action, index) => {
+  for (const [index, action] of actions.entries()) {
     const combo = action.shortcutSlot && shortcutBySlot.get(action.shortcutSlot);
-    chrome.contextMenus.create({
+    await createMenuItem({
       id: getMenuId(action, index),
       parentId: MENU_PARENT_ID,
       title: combo ? `${action.name} (${combo})` : action.name,
       contexts: ['selection']
     });
-  });
+  }
 
-  chrome.contextMenus.create({
+  await createMenuItem({
     id: `${FLOATING_MENU_ID}-separator`,
     parentId: MENU_PARENT_ID,
     type: 'separator',
     contexts: ['selection', 'page']
   });
-  chrome.contextMenus.create({
+  await createMenuItem({
     id: FLOATING_MENU_ID,
     parentId: MENU_PARENT_ID,
     title: 'Floating button: enable/disable on this domain',
