@@ -58,6 +58,13 @@ Two message types flow the other way (content script → background, `chrome.run
 
 **Migration** — `getSettings()` auto-migrates two legacy schemas: (1) old single-provider data (separate `provider`, `model`, `apiKey` fields) into a `modelConfigs` array on first access — idempotent via `modelConfigs === null` check, creates one config from old fields, assigns it to all actions, cleans up old keys. (2) Legacy boolean `darkMode` is mapped to the tri-state form: `true` → `'dark'`, `false` → `'auto'`. New installs default to `'auto'`, which follows `prefers-color-scheme` via `matchMedia` (re-applied on system theme change while in `'auto'`).
 
+**Theme flash (FOUC) prevention** — `options.js` is an ES module, so it only applied the theme after parsing plus the async `getSettings()` read; the page painted light first. Two defenses now run before it:
+
+1. `theme-boot.js` — a **classic, non-deferred** script in `<head>` — reads the mirrored preference from `localStorage` (`contexthelper.theme`) and sets `documentElement.dataset.theme` before any page content is parsed. It cannot be a module (implicitly deferred → runs after parse) and cannot be inline (MV3 CSP), so it duplicates `resolveTheme` from `lib/theme.js` — keep the two in sync. Head placement is load-bearing: an *external* script at the start of `<body>` still loses the race, because the parser blocks on its fetch after `<body>` is open and Chrome paints the light canvas meanwhile (measured).
+2. `options.css` keys every dark rule off `html[data-theme="dark"]` — **not** a body class, since a head script has no `document.body`. It also sets `color-scheme` and the dark canvas background there, with a `prefers-color-scheme` media query on `html:not([data-theme])` covering the window before the boot script runs (a brief dark canvas for a light-preference user on a dark system is the accepted trade for killing the white flash).
+
+The `localStorage` mirror is written only where the value is authoritative (after `getSettings()` in `init`, and after a successful `saveSettings` in `onSave`), never in `applyDarkMode`, so an unsaved theme cycle can't poison the next boot. A profile that receives an explicit `darkMode` through `chrome.storage.sync` from another device still flashes once on first open — the mirror is per-profile and has nothing to read yet.
+
 **Text replacement** has three strategies in `content.js`:
 - `replaceSelectedText()` — for editable inputs/textareas (native setter trick to bypass React synthetic events) and contenteditable (`document.execCommand('insertText')` to preserve undo stack)
 - `forceReplaceInDOM()` — modifies read-only DOM via Selection API; only used when `displayMode === 'insert'`

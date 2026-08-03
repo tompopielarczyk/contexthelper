@@ -46,6 +46,24 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
+/* Paint the canvas dark before any script runs — theme-boot.js sets
+   data-theme during parsing, the media query covers the very first load. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  background: #0b0f19;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    color-scheme: dark;
+    background: #0b0f19;
+  }
+}
+
 body {
   font-family: var(--font-sans);
   color: var(--gray-800);
@@ -741,7 +759,7 @@ body {
 }
 
 /* ── Dark Mode ────────────────────────────────────── */
-body.dark {
+html[data-theme="dark"] {
   --gray-50: #111827;
   --gray-100: #1f2937;
   --gray-200: #374151;
@@ -763,98 +781,98 @@ body.dark {
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
-body.dark {
+[data-theme="dark"] body {
   background: #0b0f19;
   color: var(--gray-800);
 }
 
-body.dark .card {
+[data-theme="dark"] .card {
   background: #1a1f2e;
   border-color: var(--gray-200);
 }
 
-body.dark .input {
+[data-theme="dark"] .input {
   background-color: var(--gray-100);
   border-color: var(--gray-200);
   color: var(--gray-800);
 }
 
-body.dark .input::placeholder {
+[data-theme="dark"] .input::placeholder {
   color: var(--gray-300);
 }
 
-body.dark .input:focus {
+[data-theme="dark"] .input:focus {
   border-color: var(--orange-400);
   box-shadow: 0 0 0 3px rgba(var(--orange-500-rgb), 0.2);
 }
 
-body.dark .input-select {
+[data-theme="dark"] .input-select {
   background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%239CA3AF' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-color: var(--gray-100);
 }
 
-body.dark .input-select option {
+[data-theme="dark"] .input-select option {
   background-color: var(--gray-100);
   color: var(--gray-800);
 }
 
-body.dark .model-config-card,
-body.dark .action-card {
+[data-theme="dark"] .model-config-card,
+[data-theme="dark"] .action-card {
   background: var(--gray-100);
   border-color: var(--gray-200);
 }
 
-body.dark .model-config-card:hover,
-body.dark .action-card:hover {
+[data-theme="dark"] .model-config-card:hover,
+[data-theme="dark"] .action-card:hover {
   border-color: var(--gray-300);
 }
 
-body.dark .footer {
+[data-theme="dark"] .footer {
   background: rgba(11, 15, 25, 0.9);
   border-top-color: var(--gray-200);
 }
 
-body.dark .btn-secondary {
+[data-theme="dark"] .btn-secondary {
   background: var(--gray-100);
   color: var(--gray-700);
   border-color: var(--gray-200);
 }
 
-body.dark .btn-secondary:hover {
+[data-theme="dark"] .btn-secondary:hover {
   background: var(--gray-200);
 }
 
-body.dark .btn-ghost:hover {
+[data-theme="dark"] .btn-ghost:hover {
   background: var(--gray-200);
 }
 
-body.dark .btn-dashed {
+[data-theme="dark"] .btn-dashed {
   border-color: var(--gray-200);
 }
 
-body.dark .btn-dashed:hover {
+[data-theme="dark"] .btn-dashed:hover {
   border-color: var(--orange-400);
   background: rgba(var(--orange-500-rgb), 0.1);
 }
 
-body.dark .btn-icon:hover {
+[data-theme="dark"] .btn-icon:hover {
   background: var(--gray-200);
 }
 
-body.dark .input-range {
+[data-theme="dark"] .input-range {
   background: var(--gray-200);
 }
 
-body.dark .input-range::-webkit-slider-thumb {
+[data-theme="dark"] .input-range::-webkit-slider-thumb {
   border-color: var(--gray-100);
 }
 
-body.dark .input-range::-moz-range-thumb {
+[data-theme="dark"] .input-range::-moz-range-thumb {
   border-color: var(--gray-100);
 }
 
 /* Dark mode toggle icon swap */
-body.dark .dark-mode-toggle svg {
+[data-theme="dark"] .dark-mode-toggle svg {
   fill: currentColor;
 }
 
@@ -901,11 +919,11 @@ body.dark .dark-mode-toggle svg {
   display: none;
 }
 
-body.dark .tab-nav {
+[data-theme="dark"] .tab-nav {
   border-bottom-color: var(--gray-200);
 }
 
-body.dark .tab-btn.active {
+[data-theme="dark"] .tab-btn.active {
   color: var(--orange-400);
   border-bottom-color: var(--orange-400);
 }
@@ -1009,12 +1027,12 @@ body.dark .tab-btn.active {
   background: var(--red-50) !important;
 }
 
-body.dark .webhook-card {
+[data-theme="dark"] .webhook-card {
   background: var(--gray-100);
   border-color: var(--gray-200);
 }
 
-body.dark .webhook-card:hover {
+[data-theme="dark"] .webhook-card:hover {
   border-color: var(--gray-300);
 }
 
@@ -1309,7 +1327,7 @@ body.dark .webhook-card:hover {
   background: var(--gray-100);
 }
 
-body.dark .emoji-picker {
+[data-theme="dark"] .emoji-picker {
   background: #1a1f2e;
 }
 

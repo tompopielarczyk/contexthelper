@@ -1,6 +1,7 @@
 import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList } from './lib/storage.js';
 import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
 import { testWebhook, requestWebhookPermission, requestWebhookPermissions, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
+import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
 
 // ── DOM refs ────────────────────────────────────────
 const modelConfigsList = document.getElementById('modelConfigsList');
@@ -78,6 +79,7 @@ async function init() {
 
   // Dark mode (tri-state: 'auto' | 'light' | 'dark')
   darkModeState = settings.darkMode || 'auto';
+  persistThemeBootValue(darkModeState);
   applyDarkMode();
   systemDarkMedia.addEventListener('change', () => {
     if (darkModeState === 'auto') applyDarkMode();
@@ -206,9 +208,18 @@ function activateTab(tabId) {
 
 // ── Dark Mode ──────────────────────────────────────
 function resolvedDarkMode() {
-  if (darkModeState === 'dark') return true;
-  if (darkModeState === 'light') return false;
-  return systemDarkMedia.matches;
+  return resolveTheme(darkModeState, systemDarkMedia.matches) === 'dark';
+}
+
+// Mirror the saved preference into localStorage so theme-boot.js can apply it
+// synchronously on the next open. Only ever called with a persisted value —
+// mirroring an unsaved toggle would make the next open flash the wrong theme.
+function persistThemeBootValue(preference) {
+  try {
+    localStorage.setItem(THEME_BOOT_KEY, preference);
+  } catch {
+    // storage unavailable (e.g. blocked) — boot falls back to the media query
+  }
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -242,7 +253,7 @@ const THEME_ICON_BUILDERS = {
 };
 
 function applyDarkMode() {
-  document.body.classList.toggle('dark', resolvedDarkMode());
+  document.documentElement.dataset.theme = resolvedDarkMode() ? 'dark' : 'light';
   const labels = { auto: 'Theme: System (click to change)', light: 'Theme: Light (click to change)', dark: 'Theme: Dark (click to change)' };
   darkModeToggle.title = labels[darkModeState];
   darkModeToggle.dataset.mode = darkModeState;
@@ -1116,6 +1127,7 @@ async function onSave() {
 
   try {
     await saveSettings({ modelConfigs, webhooks, actions, tooltipSettings, floatingButtonSettings, systemPrompt, darkMode });
+    persistThemeBootValue(darkMode);
     floatingAllSitesStored = floatingButtonSettings.allSites;
     syncFloatingVisibility();
     const granted = await permissionsPromise;
