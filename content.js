@@ -538,6 +538,10 @@
 
   function showFloatingButton() {
     if (floatingMouseDown) return; // still dragging — mouseup reschedules
+    // An active overlay (spinner or result/error tooltip) owns the screen —
+    // don't stack the button on top of it. Closing the tooltip re-arms via
+    // the mouseup listener, so the button can still come back afterwards.
+    if (shadowRoot?.querySelector('.cmn-overlay')) return;
     const text = getFloatingSelectionText();
     if (!text || !floatingActive()) return;
 
