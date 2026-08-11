@@ -35,7 +35,7 @@ Full policy: [PRIVACY.md](PRIVACY.md)
 
 ## Installation
 
-**Chrome Web Store** — coming soon.
+**Chrome Web Store:** [Install ContextHelper](https://chromewebstore.google.com/detail/contexthelper/mneooipcabjdchjkcokpinhipbpdlfdg)
 
 **From source:**
 
