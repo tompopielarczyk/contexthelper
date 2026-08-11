@@ -881,7 +881,11 @@ html[data-theme="dark"] {
   display: flex;
   gap: 4px;
   margin-bottom: 24px;
-  border-bottom: 1px solid var(--gray-200);
+  /* Inset shadow instead of border-bottom + negative button margin: the old
+     overlap trick made buttons overflow the nav by 1px, which showed a
+     vertical scrollbar on browsers with classic (always-visible) scrollbars
+     because overflow-x: auto forces overflow-y to compute to auto. */
+  box-shadow: inset 0 -1px 0 var(--gray-200);
   overflow-x: auto;
 }
 
@@ -896,7 +900,6 @@ html[data-theme="dark"] {
   color: var(--gray-500);
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
-  margin-bottom: -1px;
   white-space: nowrap;
 }
 
@@ -917,10 +920,6 @@ html[data-theme="dark"] {
 
 .tab-panel[hidden] {
   display: none;
-}
-
-[data-theme="dark"] .tab-nav {
-  border-bottom-color: var(--gray-200);
 }
 
 [data-theme="dark"] .tab-btn.active {
