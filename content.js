@@ -1151,7 +1151,6 @@
         border: 1px solid #e5e7eb;
         border-radius: 6px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        overflow: hidden;
       }
 
       /* display: flex above beats the UA [hidden] rule — restore it (CLAUDE.md pitfall) */
