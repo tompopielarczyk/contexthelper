@@ -1154,6 +1154,11 @@
         overflow: hidden;
       }
 
+      /* display: flex above beats the UA [hidden] rule — restore it (CLAUDE.md pitfall) */
+      .cmn-send-menu[hidden] {
+        display: none;
+      }
+
       .cmn-send-item {
         border: none;
         background: transparent;
