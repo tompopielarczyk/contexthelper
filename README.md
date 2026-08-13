@@ -5,6 +5,11 @@
 
   **AI actions on selected text — with your own API keys.**
 
+  [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/mneooipcabjdchjkcokpinhipbpdlfdg?label=Chrome%20Web%20Store&color=4285F4)](https://chromewebstore.google.com/detail/contexthelper/mneooipcabjdchjkcokpinhipbpdlfdg)
+  [![Users](https://img.shields.io/chrome-web-store/users/mneooipcabjdchjkcokpinhipbpdlfdg?color=4285F4)](https://chromewebstore.google.com/detail/contexthelper/mneooipcabjdchjkcokpinhipbpdlfdg)
+  [![Rating](https://img.shields.io/chrome-web-store/rating/mneooipcabjdchjkcokpinhipbpdlfdg?color=4285F4)](https://chromewebstore.google.com/detail/contexthelper/mneooipcabjdchjkcokpinhipbpdlfdg/reviews)
+  ![Manifest V3](https://img.shields.io/badge/Manifest-V3-green)
+
   Select text on any page → translate, summarize, rewrite, or run any custom prompt.
   No middleman server, no account, no tracking.
 </div>
