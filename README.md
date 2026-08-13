@@ -44,6 +44,10 @@ Select text, run an action, get the result in a tooltip — with one-click webho
 |---|---|
 | ![Models tab in options](docs/screenshots/options-models.png) | ![Webhooks tab in options](docs/screenshots/options-webhooks.png) |
 
+| Tooltip appearance with live preview | |
+|---|---|
+| ![Appearance tab in options](docs/screenshots/options-appearance.png) | |
+
 ## Privacy
 
 - Selected text goes **directly from your browser to the provider you chose** — nowhere else
