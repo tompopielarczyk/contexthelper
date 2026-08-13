@@ -30,6 +30,20 @@
 - **Live model lists** — model pickers load current models from each provider's API, with offline fallback
 - **Dark mode** — follows your system, or force light/dark
 
+## Screenshots
+
+Select text, run an action, get the result in a tooltip — with one-click webhook delivery:
+
+![Result tooltip with AI answer and webhook send button](docs/screenshots/result-tooltip.png)
+
+| Floating button on selection | Custom actions with shortcuts |
+|---|---|
+| ![Floating selection button](docs/screenshots/floating-button.png) | ![Actions tab in options](docs/screenshots/options-actions.png) |
+
+| Model configs (bring your own key) | Webhook payload templates |
+|---|---|
+| ![Models tab in options](docs/screenshots/options-models.png) | ![Webhooks tab in options](docs/screenshots/options-webhooks.png) |
+
 ## Privacy
 
 - Selected text goes **directly from your browser to the provider you chose** — nowhere else
