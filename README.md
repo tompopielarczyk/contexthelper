@@ -9,6 +9,7 @@
   [![Users](https://img.shields.io/chrome-web-store/users/mneooipcabjdchjkcokpinhipbpdlfdg?color=4285F4)](https://chromewebstore.google.com/detail/contexthelper/mneooipcabjdchjkcokpinhipbpdlfdg)
   [![Rating](https://img.shields.io/chrome-web-store/rating/mneooipcabjdchjkcokpinhipbpdlfdg?color=4285F4)](https://chromewebstore.google.com/detail/contexthelper/mneooipcabjdchjkcokpinhipbpdlfdg/reviews)
   ![Manifest V3](https://img.shields.io/badge/Manifest-V3-green)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
   Select text on any page → translate, summarize, rewrite, or run any custom prompt.
   No middleman server, no account, no tracking.
@@ -86,3 +87,7 @@ Run the tests with:
 ```
 npm test
 ```
+
+## License
+
+[MIT](LICENSE)
