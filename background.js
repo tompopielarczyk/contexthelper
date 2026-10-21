@@ -710,7 +710,8 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     });
 
     if (signal.aborted) return;
-    throttle?.flush();
+    // Cancel, never flush: AI_RESULT carries the full text, and a last chunk
+    // would flash the streaming tooltip for an answer that finished fast
     throttle?.cancel();
 
     const conversationBase = messages?.length ? messages : [{ role: 'user', content: prompt }];

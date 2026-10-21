@@ -292,9 +292,10 @@
     el.appendChild(closeBtn);
     appendAndClampOverlay(el, pos);
 
-    // Esc, ✕ or a click outside cancels the run
+    // Only Esc or ✕ cancels the run. A click on the page (e.g. back into the
+    // textarea an insert-mode run will write to) must not throw away a
+    // request whose tokens are already being spent.
     addEscHandler(cancelActiveRun);
-    addOutsideClickHandler(cancelActiveRun);
   }
 
   function addEscHandler(onEscape) {
@@ -396,8 +397,8 @@
       el.appendChild(content);
       appendAndClampOverlay(el, getPosition(ts?.position, size));
 
+      // Like the spinner: only Esc or ✕ stops the stream, never an outside click
       addEscHandler(cancelActiveRun);
-      addOutsideClickHandler(cancelActiveRun);
     }
 
     const content = el.querySelector('.cmn-stream-content');
