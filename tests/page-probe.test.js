@@ -198,3 +198,41 @@ test('a contenteditable selection is editable; no selection gives empty text', (
     text: '', editable: false, sensitive: false, blockText: '', start: 0, end: 0, ...PAGE
   });
 });
+
+// A sensitive field blocks only when it holds the selection
+test('a focused password field without a selection falls through to the page selection', (t) => {
+  const { block, selection } = pageSelection('Alpha beta gamma', 6, 10);
+  const pw = control({ type: 'password', value: 'hunter2', start: 3, end: 3 });
+  withPage(t, { activeElement: pw, selection, body: block });
+  const r = injected(SELECTION_RULES, true);
+  assert.equal(r.sensitive, false);
+  assert.equal(r.text, 'beta');
+  assert.equal(r.blockText, 'Alpha beta gamma');
+  assert.equal(pw.valueReads, 0);
+});
+
+test('a focused cc field with a collapsed caret and no page selection is not sensitive', (t) => {
+  const cc = control({ type: 'text', autocomplete: 'cc-number', value: '4111', start: 0, end: 0 });
+  withPage(t, { activeElement: cc, selection: { rangeCount: 0, toString: () => '' } });
+  const r = injected(SELECTION_RULES, false);
+  assert.equal(r.sensitive, false);
+  assert.equal(r.text, '');
+  assert.equal(cc.valueReads, 0);
+});
+
+test('unreadable offsets on a sensitive field block only when the page selection is empty', (t) => {
+  const pw = control({ type: 'password', value: 'hunter2', selectionThrows: true });
+  withPage(t, { activeElement: pw, selection: { rangeCount: 0, toString: () => '' } });
+  assert.equal(injected(SELECTION_RULES, false).sensitive, true);
+
+  const nullOffsets = control({ type: 'text', autocomplete: 'new-password', value: 'x' });
+  withPage(t, { activeElement: nullOffsets, selection: null });
+  assert.equal(injected(SELECTION_RULES, false).sensitive, true);
+
+  const { selection } = pageSelection('Some page text', 5, 9);
+  withPage(t, { activeElement: pw, selection });
+  const r = injected(SELECTION_RULES, false);
+  assert.equal(r.sensitive, false);
+  assert.equal(r.text, 'page');
+  assert.equal(pw.valueReads + nullOffsets.valueReads, 0);
+});
