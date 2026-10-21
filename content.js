@@ -463,6 +463,8 @@
       activeCleanups.push(() => clearTimeout(resetTimer));
     });
 
+    const refineControls = refine ? createRefineControls(refine, ts) : null;
+    if (refineControls) actions.appendChild(refineControls.menu);
     if (sendContext) {
       actions.appendChild(createWebhookSendControl(sendContext));
     }
@@ -475,7 +477,7 @@
 
     el.appendChild(closeBtn);
     el.appendChild(content);
-    if (refine) el.appendChild(createRefineBar(refine, ts));
+    if (refineControls) el.appendChild(refineControls.followUp);
     el.appendChild(actions);
     appendAndClampOverlay(el, pos);
     observeTooltipResize(el);
@@ -509,36 +511,39 @@
     return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  // Refine bar under the result: presets and ↻ Retry on one row, the
-  // follow-up input below. Each sends REFINE_ACTION through requestRun;
-  // presets are resolved by key in the background (REFINE_PRESETS in
-  // lib/chat.js), Retry sends neither a preset nor an instruction.
-  function createRefineBar({ actionId, conversation, sourceText }, ts) {
-    const bar = document.createElement('div');
-    bar.className = 'cmn-refine';
-    const buttons = document.createElement('div');
-    buttons.className = 'cmn-refine-presets';
-
+  // Refine controls for a result: a "Refine ▾" drop-up with the presets
+  // (left end of the Send/Copy row) and the follow-up input on its own row
+  // above. Each sends REFINE_ACTION through requestRun; presets are resolved
+  // by key in the background (REFINE_PRESETS in lib/chat.js).
+  function createRefineControls({ actionId, conversation, sourceText }, ts) {
     const submit = (extra) => requestRun({
       type: 'REFINE_ACTION', actionId, conversation, sourceText, ...extra
     }, ts);
 
+    const menuWrap = document.createElement('div');
+    menuWrap.className = 'cmn-send-wrap cmn-refine-wrap';
+    const menuBtn = document.createElement('button');
+    menuBtn.className = 'cmn-btn cmn-btn-send';
+    menuBtn.textContent = 'Refine ▾';
+    const menu = document.createElement('div');
+    menu.className = 'cmn-send-menu cmn-refine-menu';
+    menu.hidden = true;
     for (const [label, preset] of [['Shorter', 'shorter'], ['Longer', 'longer'], ['Simpler', 'simpler']]) {
-      const btn = document.createElement('button');
-      btn.className = 'cmn-btn cmn-btn-send cmn-refine-btn';
-      btn.textContent = label;
-      btn.title = label;
-      btn.addEventListener('click', () => submit({ preset }));
-      buttons.appendChild(btn);
+      const item = document.createElement('button');
+      item.className = 'cmn-send-item';
+      item.textContent = label;
+      item.addEventListener('click', () => {
+        menu.hidden = true;
+        submit({ preset });
+      });
+      menu.appendChild(item);
     }
+    menuBtn.addEventListener('click', () => toggleActionMenu(menu));
+    menuWrap.appendChild(menuBtn);
+    menuWrap.appendChild(menu);
 
-    const retryBtn = document.createElement('button');
-    retryBtn.className = 'cmn-btn cmn-btn-send cmn-refine-btn';
-    retryBtn.textContent = '↻ Retry';
-    retryBtn.title = 'Generate the answer again';
-    retryBtn.addEventListener('click', () => submit({}));
-    buttons.appendChild(retryBtn);
-    bar.appendChild(buttons);
+    const bar = document.createElement('div');
+    bar.className = 'cmn-refine';
 
     const input = document.createElement('input');
     input.type = 'text';
@@ -560,7 +565,7 @@
     input.addEventListener('keypress', (e) => e.stopPropagation());
     bar.appendChild(input);
 
-    return bar;
+    return { menu: menuWrap, followUp: bar };
   }
 
   /**
@@ -808,12 +813,21 @@
       });
       menu.appendChild(item);
     }
-    btn.addEventListener('click', () => {
-      menu.hidden = !menu.hidden;
-    });
+    btn.addEventListener('click', () => toggleActionMenu(menu));
     wrap.appendChild(btn);
     wrap.appendChild(menu);
     return wrap;
+  }
+
+  // Drop-up menus in the actions row (Refine, Send) — opening one closes the
+  // other, so they never overlap
+  function toggleActionMenu(menu) {
+    const opening = menu.hidden;
+    const row = menu.closest('.cmn-actions');
+    if (opening && row) {
+      for (const other of row.querySelectorAll('.cmn-send-menu')) other.hidden = true;
+    }
+    menu.hidden = !opening;
   }
 
   // ── Floating selection button ──
@@ -1583,13 +1597,11 @@
         display: none;
       }
 
-      /* Refine bar under the result: a row of presets + Retry, then the
-         follow-up input. Fixed height (buttons shrink with an ellipsis
-         instead of wrapping), so only .cmn-content shrinks and scrolls. */
+      /* Follow-up input row above the actions. Fixed height, so only
+         .cmn-content shrinks and scrolls. */
       .cmn-refine {
         display: flex;
         flex-direction: column;
-        gap: 6px;
         flex-shrink: 0;
         margin-bottom: 8px;
       }
@@ -1599,24 +1611,14 @@
         display: none;
       }
 
-      .cmn-refine-presets {
-        display: flex;
-        gap: 6px;
-        min-width: 0;
+      /* "Refine ▾" sits at the left end of the actions row; Send/Copy stay right */
+      .cmn-refine-wrap {
+        margin-right: auto;
       }
 
-      .cmn-refine-presets[hidden] {
-        display: none;
-      }
-
-      .cmn-refine-btn {
-        flex: 0 1 auto;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        padding: 3px 9px;
-        font-size: 12px;
+      .cmn-refine-menu {
+        right: auto;
+        left: 0;
       }
 
       .cmn-refine-input {

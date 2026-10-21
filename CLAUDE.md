@@ -34,7 +34,7 @@ Supported providers: Anthropic, OpenAI, Google Gemini, OpenRouter (includes open
 2. `background.js` (`handleMenuClick` or `handleCommand`, both thin adapters over the shared `runAction`) builds a request and hands it to `runChat`, which sends `AI_PROCESSING_START` and calls `lib/api-client.js`
 3. Content script shows loading spinner (Shadow DOM overlay)
 4. For tooltip results the answer streams in (`AI_CHUNK`); the background then sends `AI_RESULT` or `AI_ERROR`
-5. Content script either replaces selected text or shows result tooltip (with the refine bar)
+5. Content script either replaces selected text or shows result tooltip (with the refine controls)
 
 ### The `runChat` runner
 
@@ -69,7 +69,7 @@ Content → background (`chrome.runtime.sendMessage`):
 
 ### Refine and Ask
 
-**Refine** — every LLM result tooltip (not DeepL, not explicit insert mode) has a refine bar: `Shorter`, `Longer`, `Simpler`, `↻ Retry` and a `Follow up…` input. Presets are sent as keys and resolved in the background via `REFINE_PRESETS` (`lib/chat.js`). The conversation travels with the tooltip (the worker may have restarted): `sanitizeConversation` requires user-first strict alternation ending in assistant, ≤ 100 000 chars per message, and trims to the first pair + last 18 (`MAX_CONVERSATION_MESSAGES` = 20). Config: `ASK_ACTION_ID` (`'__ask__'`) → `pickLLMConfig(configs)`; otherwise the action's config via `pickLLMConfig(configs, action.modelConfigId)`.
+**Refine** — every LLM result tooltip (not DeepL, not explicit insert mode) has refine controls: a `Refine ▾` drop-up (`Shorter`, `Longer`, `Simpler`) at the left end of the Send/Copy row, and a `Follow up…` input above that row. Successful results have no Retry button (Retry lives only in the error tooltip; `REFINE_ACTION` without `preset`/`instruction` still regenerates). Presets are sent as keys and resolved in the background via `REFINE_PRESETS` (`lib/chat.js`). The conversation travels with the tooltip (the worker may have restarted): `sanitizeConversation` requires user-first strict alternation ending in assistant, ≤ 100 000 chars per message, and trims to the first pair + last 18 (`MAX_CONVERSATION_MESSAGES` = 20). Config: `ASK_ACTION_ID` (`'__ask__'`) → `pickLLMConfig(configs)`; otherwise the action's config via `pickLLMConfig(configs, action.modelConfigId)`.
 
 **Ask** — "Ask about selection…" (context menu item `contexthelper-ask`, always present even with zero actions) and the `ask-selection` command (no suggested key). The background sends `ASK_PROMPT`; the content input captures the selection and anchor before focusing, stops key-event propagation, handles Esc locally and ignores Enter while `isComposing`. `RUN_ASK` builds `buildAskPrompt(question, text)` and runs on the first non-DeepL config.
 
