@@ -87,3 +87,48 @@ test('isRetryableError', () => {
   assert.equal(isRetryableError(new DOMException('Request cancelled', 'AbortError')), false);
   assert.equal(isRetryableError(null), false);
 });
+
+// --- Task 4: refine ---------------------------------------------------------
+import { buildRefineMessages, sanitizeConversation, REFINE_PRESETS, MAX_CONVERSATION_MESSAGES } from '../lib/chat.js';
+
+const conv = [{ role: 'user', content: 'P' }, { role: 'assistant', content: 'R' }];
+test('buildRefineMessages appends instruction / drops last answer on retry', () => {
+  assert.deepEqual(buildRefineMessages(conv, ' Shorter '), [...conv, { role: 'user', content: 'Shorter' }]);
+  assert.deepEqual(buildRefineMessages(conv, null), [{ role: 'user', content: 'P' }]);
+});
+test('sanitizeConversation rejects malformed input', () => {
+  assert.equal(sanitizeConversation(null), null);
+  assert.equal(sanitizeConversation([]), null);
+  assert.equal(sanitizeConversation([{ role: 'assistant', content: 'x' }]), null);
+  assert.equal(sanitizeConversation([{ role: 'user', content: 'x' }]), null); // must end with assistant
+  assert.equal(sanitizeConversation([{ role: 'user', content: 1 }, { role: 'assistant', content: 'r' }]), null);
+  assert.equal(sanitizeConversation([{ role: 'system', content: 'x' }, { role: 'assistant', content: 'r' }]), null);
+  assert.deepEqual(sanitizeConversation(conv), conv);
+});
+test('sanitizeConversation trims to first pair + last 18', () => {
+  const long = Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: String(i) }));
+  const out = sanitizeConversation(long);
+  assert.equal(out.length, 20);
+  assert.deepEqual(out.slice(0, 3).map(m => m.content), ['0', '1', '22']);
+  out.forEach((m, i) => i && assert.notEqual(m.role, out[i - 1].role));
+});
+test('sanitizeConversation rejects broken alternation, oversize content and non-arrays', () => {
+  assert.equal(sanitizeConversation('nope'), null);
+  assert.equal(sanitizeConversation([{ role: 'user', content: 'a' }, { role: 'user', content: 'b' },
+    { role: 'assistant', content: 'c' }, { role: 'assistant', content: 'd' }]), null);
+  assert.equal(sanitizeConversation([{ role: 'user', content: 'x'.repeat(100_001) }, { role: 'assistant', content: 'r' }]), null);
+  assert.deepEqual(sanitizeConversation([{ role: 'user', content: 'x'.repeat(100_000) }, { role: 'assistant', content: 'r' }])?.length, 2);
+  assert.equal(sanitizeConversation([null, { role: 'assistant', content: 'r' }]), null);
+});
+test('sanitizeConversation strips extra fields', () => {
+  const out = sanitizeConversation([{ role: 'user', content: 'P', extra: 1 }, { role: 'assistant', content: 'R' }]);
+  assert.deepEqual(out, conv);
+});
+test('REFINE_PRESETS and MAX_CONVERSATION_MESSAGES', () => {
+  assert.equal(MAX_CONVERSATION_MESSAGES, 20);
+  assert.deepEqual(REFINE_PRESETS, {
+    shorter: 'Make it shorter. Return only the revised text.',
+    longer: 'Expand it with more detail. Return only the revised text.',
+    simpler: 'Rewrite it in simpler language. Return only the revised text.'
+  });
+});

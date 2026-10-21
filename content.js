@@ -378,11 +378,11 @@
    * @param {object} ts  tooltipSettings
    * @param {{ sendContext?: object | null, position?: { top: number, left: number } | null,
    *   refine?: { actionId: string, conversation: Array, sourceText: string } | null }} [opts]
-   *   `position` pins the tooltip (e.g. where the stream was); `refine` is
-   *   carried for follow-up turns and not rendered yet.
+   *   `position` pins the tooltip (e.g. where the stream was); `refine`
+   *   renders the refine bar (absent for DeepL and insert results).
    */
   function showResultTooltip(text, ts, opts = {}) {
-    const { sendContext = null, position = null } = opts;
+    const { sendContext = null, position = null, refine = null } = opts;
     ensureShadowHost();
     hideOverlay();
 
@@ -435,12 +435,82 @@
 
     el.appendChild(closeBtn);
     el.appendChild(content);
+    if (refine) el.appendChild(createRefineBar(refine));
     el.appendChild(actions);
     appendAndClampOverlay(el, pos);
     observeTooltipResize(el);
 
     addEscHandler(hideOverlay);
     addOutsideClickHandler(hideOverlay);
+  }
+
+  // Copy of REFINE_PRESETS in lib/chat.js (a content script cannot import) —
+  // keep the two in sync
+  const REFINE_PRESETS = {
+    shorter: 'Make it shorter. Return only the revised text.',
+    longer: 'Expand it with more detail. Return only the revised text.',
+    simpler: 'Rewrite it in simpler language. Return only the revised text.'
+  };
+
+  // Refine bar under the result: presets, ↻ Retry and a follow-up input.
+  // Each sends REFINE_ACTION; the background answers with a new run
+  // (spinner → result), so the bar only disables itself while that starts.
+  function createRefineBar({ actionId, conversation, sourceText }) {
+    const bar = document.createElement('div');
+    bar.className = 'cmn-refine';
+    const controls = [];
+
+    function submit(instruction) {
+      for (const c of controls) c.disabled = true;
+      const enable = () => { for (const c of controls) c.disabled = false; };
+      try {
+        chrome.runtime.sendMessage({
+          type: 'REFINE_ACTION', actionId, conversation, instruction, sourceText
+        }).catch(enable);
+      } catch {
+        enable(); // extension reloaded mid-session
+      }
+    }
+
+    for (const [label, key] of [['Shorter', 'shorter'], ['Longer', 'longer'], ['Simpler', 'simpler']]) {
+      const btn = document.createElement('button');
+      btn.className = 'cmn-btn cmn-btn-send cmn-refine-btn';
+      btn.textContent = label;
+      btn.addEventListener('click', () => submit(REFINE_PRESETS[key]));
+      controls.push(btn);
+      bar.appendChild(btn);
+    }
+
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'cmn-btn cmn-btn-send cmn-refine-btn';
+    retryBtn.textContent = '↻ Retry';
+    retryBtn.title = 'Generate the answer again';
+    retryBtn.addEventListener('click', () => submit(null));
+    controls.push(retryBtn);
+    bar.appendChild(retryBtn);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cmn-refine-input';
+    input.placeholder = 'Follow up…';
+    // Keep the page's shortcuts (and the document-level Esc handler) out of
+    // typing — Esc is handled here instead
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        hideOverlay();
+      } else if (e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault();
+        const value = input.value.trim();
+        if (value) submit(value);
+      }
+    });
+    input.addEventListener('keyup', (e) => e.stopPropagation());
+    input.addEventListener('keypress', (e) => e.stopPropagation());
+    controls.push(input);
+    bar.appendChild(input);
+
+    return bar;
   }
 
   /**
@@ -1395,6 +1465,55 @@
       /* display: flex above beats the UA [hidden] rule — restore it (CLAUDE.md pitfall) */
       .cmn-send-menu[hidden] {
         display: none;
+      }
+
+      /* Refine bar: presets, Retry and the follow-up input under the result */
+      .cmn-refine {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+        margin-bottom: 8px;
+      }
+
+      /* display: flex above beats the UA [hidden] rule — restore it (CLAUDE.md pitfall) */
+      .cmn-refine[hidden] {
+        display: none;
+      }
+
+      .cmn-refine-btn {
+        padding: 3px 9px;
+        font-size: 12px;
+      }
+
+      .cmn-refine-input {
+        flex: 1 1 120px;
+        min-width: 0;
+        box-sizing: border-box;
+        padding: 4px 8px;
+        border: 1px solid rgba(127, 127, 127, 0.45);
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-size: 12px;
+        outline: none;
+      }
+
+      .cmn-refine-input:focus {
+        border-color: #f97316;
+      }
+
+      .cmn-refine-input::placeholder {
+        color: inherit;
+        opacity: 0.55;
+      }
+
+      .cmn-refine-btn:disabled,
+      .cmn-refine-input:disabled {
+        cursor: default;
+        opacity: 0.6;
       }
 
       .cmn-send-item {

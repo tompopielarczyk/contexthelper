@@ -1,7 +1,10 @@
 import { getSettings, saveSettings, onSettingsChanged, isFirstRun, markInitialized, customOrigins } from './lib/storage.js';
 import { callAI } from './lib/api-client.js';
 import { sendWebhook, renderTemplate } from './lib/webhook.js';
-import { shouldStream, createThrottle, isRetryableError } from './lib/chat.js';
+import {
+  shouldStream, createThrottle, isRetryableError,
+  ASK_ACTION_ID, pickLLMConfig, sanitizeConversation, buildRefineMessages
+} from './lib/chat.js';
 import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
@@ -31,6 +34,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === 'RETRY_RUN') {
     handleRetryRun(message.retry, sender);
+  }
+  if (message?.type === 'REFINE_ACTION') {
+    handleRefine(message, sender);
   }
 });
 
@@ -330,9 +336,47 @@ async function handleRetryRun(retry, sender) {
       }, tab, settings);
       return;
     }
+    case 'refine':
+      await handleRefine(retry, sender);
+      return;
     default:
       return;
   }
+}
+
+// Refine bar in the result tooltip: Shorter / Longer / Simpler / follow-up
+// (`instruction` string) or ↻ Retry (`instruction: null`) on the conversation
+// the result came with. The conversation comes back from the page, so it is
+// re-validated here.
+async function handleRefine({ actionId, conversation, instruction, sourceText }, sender) {
+  const tab = sender?.tab;
+  if (!tab?.id) return;
+  if (instruction !== null && (typeof instruction !== 'string' || !instruction.trim())) return;
+
+  const settings = await getSettings();
+  const cleanConversation = sanitizeConversation(conversation);
+  const source = typeof sourceText === 'string' ? sourceText : '';
+
+  await runChat(tab, settings, async () => {
+    if (!cleanConversation) throw new Error('This result can no longer be refined');
+    const isAsk = actionId === ASK_ACTION_ID;
+    const action = isAsk ? null : (settings.actions || []).find(a => a.id === actionId);
+    if (!isAsk && !action) throw new Error('Action no longer exists');
+    const config = isAsk
+      ? pickLLMConfig(settings.modelConfigs)
+      : pickLLMConfig(settings.modelConfigs, action.modelConfigId);
+    if (!config) throw new Error('No LLM model configured');
+    if (config.provider === 'deepl') throw new Error('Refine is not available for DeepL');
+
+    return {
+      config,
+      messages: buildRefineMessages(cleanConversation, instruction),
+      systemPrompt: settings.systemPrompt,
+      displayMode: 'tooltip',
+      editable: false,
+      meta: { actionId, actionName: action?.name || 'Ask', sourceText: source }
+    };
+  }, { kind: 'refine', actionId, conversation: cleanConversation, instruction, sourceText: source });
 }
 
 // Keep the registered content script in step with the opt-in list: the button
