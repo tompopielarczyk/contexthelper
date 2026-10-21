@@ -1,6 +1,6 @@
-import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList } from './lib/storage.js';
-import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
-import { testWebhook, requestWebhookPermission, requestWebhookPermissions, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
+import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList, customOrigins } from './lib/storage.js';
+import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, normalizeBaseUrl, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
+import { testWebhook, requestWebhookPermission, requestOriginPermissions, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
 
 // ── DOM refs ────────────────────────────────────────
@@ -284,6 +284,9 @@ function addModelConfigCard(config) {
   const modelHint = card.querySelector('.model-config-model-hint');
   const modelWarn = card.querySelector('.model-config-model-warn');
   const apiKeyInput = card.querySelector('.model-config-apikey');
+  const apiKeyLabel = card.querySelector('.model-config-apikey-label');
+  const baseUrlField = card.querySelector('.model-config-baseurl');
+  const baseUrlInput = card.querySelector('.model-config-baseurl-input');
   const toggleKeyBtn = card.querySelector('.model-config-toggle-key');
   const testBtn = card.querySelector('.model-config-test');
   const testResult = card.querySelector('.model-config-test-result');
@@ -292,6 +295,7 @@ function addModelConfigCard(config) {
   nameInput.value = config.name;
   providerSelect.value = config.provider;
   apiKeyInput.value = config.apiKey;
+  baseUrlInput.value = config.baseUrl || '';
 
   modelDatalist.id = `model-list-${config.id}`;
   modelInput.setAttribute('list', modelDatalist.id);
@@ -328,13 +332,17 @@ function addModelConfigCard(config) {
   };
 
   const refreshModels = (forceFetch) =>
-    populateModelDatalist(modelDatalist, modelHint, providerSelect.value, apiKeyInput.value.trim(), forceFetch, onListUpdate);
+    populateModelDatalist(modelDatalist, modelHint, providerSelect.value, apiKeyInput.value.trim(), forceFetch, onListUpdate, baseUrlInput.value.trim());
   refreshModels(false);
 
-  // DeepL has no model — hide the whole Model field
+  // DeepL has no model — hide the whole Model field; only custom has a base
+  // URL, and its key is optional (local servers need none)
   const modelField = modelInput.closest('.field');
   const syncProviderFields = () => {
+    const isCustom = providerSelect.value === 'custom';
     modelField.hidden = providerSelect.value === 'deepl';
+    baseUrlField.hidden = !isCustom;
+    apiKeyLabel.textContent = isCustom ? 'API Key (optional)' : 'API Key';
   };
   syncProviderFields();
 
@@ -348,12 +356,15 @@ function addModelConfigCard(config) {
     refreshActionModelSelectors();
   });
 
-  // A freshly entered key may unlock the live list — refetch after typing settles
+  // A freshly entered key (or custom base URL) may unlock the live list —
+  // refetch after typing settles
   let modelFetchTimer = 0;
-  apiKeyInput.addEventListener('input', () => {
+  const scheduleModelRefetch = () => {
     clearTimeout(modelFetchTimer);
     modelFetchTimer = setTimeout(() => refreshModels(true), 600);
-  });
+  };
+  apiKeyInput.addEventListener('input', scheduleModelRefetch);
+  baseUrlInput.addEventListener('input', scheduleModelRefetch);
 
   toggleKeyBtn.addEventListener('click', () => {
     const isPassword = apiKeyInput.type === 'password';
@@ -364,9 +375,28 @@ function addModelConfigCard(config) {
   testBtn.addEventListener('click', async () => {
     const btnText = testBtn.querySelector('.btn-text');
     const btnSpinner = testBtn.querySelector('.btn-spinner');
+    const provider = providerSelect.value;
     const apiKey = apiKeyInput.value.trim();
 
-    if (!apiKey) {
+    // Custom endpoints need a runtime grant for their origin. Request it
+    // before any await — chrome.permissions.request needs the click gesture.
+    let baseUrl;
+    let origin;
+    let grantedPromise;
+    if (provider === 'custom') {
+      try {
+        baseUrl = normalizeBaseUrl(baseUrlInput.value);
+        origin = new URL(baseUrl).origin;
+      } catch (err) {
+        showTestResultInCard(testResult, err.message, false);
+        return;
+      }
+      if (!modelInput.value.trim()) {
+        showTestResultInCard(testResult, 'Enter a model ID', false);
+        return;
+      }
+      grantedPromise = chrome.permissions.request({ origins: [origin + '/*'] }).catch(() => false);
+    } else if (!apiKey) {
       showTestResultInCard(testResult, 'Enter an API key', false);
       return;
     }
@@ -377,19 +407,26 @@ function addModelConfigCard(config) {
     testResult.hidden = true;
 
     try {
-      if (providerSelect.value === 'deepl') {
+      if (provider === 'custom' && !await grantedPromise) {
+        showTestResultInCard(testResult, `Permission for ${origin} denied`, false);
+        return;
+      }
+      if (provider === 'deepl') {
         const usage = await getDeepLUsage(apiKey);
         const fmt = n => n.toLocaleString('pl-PL');
         showTestResultInCard(testResult, `Connection OK — ${fmt(usage.characterCount)} / ${fmt(usage.characterLimit)} characters used`, true);
       } else {
         const model = modelInput.value.trim();
         await callAI({
-          provider: providerSelect.value,
+          provider,
           apiKey,
           model,
+          baseUrl,
           prompt: 'Say OK'
         });
         showTestResultInCard(testResult, 'Connection OK', true);
+        // The origin grant may have just unlocked the endpoint's model list
+        if (provider === 'custom') refreshModels(true);
       }
     } catch (err) {
       showTestResultInCard(testResult, err.message, false);
@@ -451,7 +488,7 @@ function closestModelId(target, ids) {
 
 // Fill the datalist: static list immediately, cached live list if present,
 // then a background refetch when the cache is stale/missing (or forceFetch).
-async function populateModelDatalist(datalist, hintEl, provider, apiKey, forceFetch, onUpdate) {
+async function populateModelDatalist(datalist, hintEl, provider, apiKey, forceFetch, onUpdate, baseUrl) {
   if (provider === 'deepl') return;
   const seq = (datalist._seq = (datalist._seq || 0) + 1);
 
@@ -469,18 +506,31 @@ async function populateModelDatalist(datalist, hintEl, provider, apiKey, forceFe
     if (onUpdate) onUpdate();
   };
 
-  setList(getAvailableModels(provider), 'Built-in list');
+  // A custom endpoint has no built-in list; its live list is cached per base URL
+  let cacheKey = provider;
+  if (provider === 'custom') {
+    try {
+      cacheKey = `custom:${normalizeBaseUrl(baseUrl)}`;
+    } catch {
+      setList([], 'Enter a valid base URL to load the model list');
+      return;
+    }
+    setList([], 'No model list yet — type the model ID');
+  } else {
+    setList(getAvailableModels(provider), 'Built-in list');
+  }
 
-  const cached = await getCachedModelList(provider);
+  const cached = await getCachedModelList(cacheKey);
   if (cached) setList(cached.models, `${cached.models.length} models · from API`);
 
-  const hasAuth = provider === 'openrouter' || apiKey;
+  // OpenRouter's list is public; local custom servers usually need no key
+  const hasAuth = provider === 'openrouter' || provider === 'custom' || apiKey;
   if (!hasAuth || (cached && !cached.stale && !forceFetch)) return;
 
   try {
-    const models = await fetchAvailableModels(provider, apiKey);
+    const models = await fetchAvailableModels(provider, apiKey, undefined, baseUrl);
     if (models && models.length > 0) {
-      await setCachedModelList(provider, models);
+      await setCachedModelList(cacheKey, models);
       setList(models, `${models.length} models · from API`);
     }
   } catch {
@@ -633,13 +683,17 @@ function collectModelConfigs() {
       ? ''
       : card.querySelector('.model-config-model').value.trim();
 
-    configs.push({
+    const config = {
       id: card.dataset.configId,
       name: card.querySelector('.model-config-name').value.trim(),
       provider,
       model,
       apiKey: card.querySelector('.model-config-apikey').value.trim()
-    });
+    };
+    if (provider === 'custom') {
+      config.baseUrl = card.querySelector('.model-config-baseurl-input').value.trim();
+    }
+    configs.push(config);
   }
   return configs;
 }
@@ -1024,7 +1078,7 @@ function renderFloatingDomains(domains) {
 // Applied immediately (not on Save) — mirrors the page context-menu toggle,
 // which also writes straight to storage.
 async function removeFloatingDomain(host) {
-  const { floatingButtonSettings: fb, webhooks } = await getSettings();
+  const { floatingButtonSettings: fb, webhooks, modelConfigs } = await getSettings();
   const domains = (fb.domains || []).filter(d => d !== host);
   await saveSettings({ floatingButtonSettings: { ...fb, domains } });
   const usedByWebhook = (webhooks || []).some(w => {
@@ -1034,7 +1088,9 @@ async function removeFloatingDomain(host) {
   // from the active set and break API fetches (see onSave)
   const isApiHost = chrome.runtime.getManifest().host_permissions
     .some(pattern => pattern.includes(`//${host}/`));
-  if (!usedByWebhook && !isApiHost) {
+  // A custom model endpoint on this host still needs its grant
+  const usedByCustom = customOrigins(modelConfigs).some(pattern => new URL(pattern).hostname === host);
+  if (!usedByWebhook && !isApiHost && !usedByCustom) {
     try {
       await chrome.permissions.remove({ origins: [`https://${host}/*`, `http://${host}/*`] });
     } catch { /* keep the grant */ }
@@ -1068,9 +1124,12 @@ async function onSave() {
   const systemPrompt = systemPromptInput.value;
   const darkMode = darkModeState;
 
-  // Grant webhook origins while we still have the click gesture (before any
-  // await) — otherwise the first tooltip send would fail with a network error.
-  const permissionsPromise = requestWebhookPermissions(webhooks.map(w => w.url).filter(Boolean));
+  // Grant webhook and custom-endpoint origins while we still have the click
+  // gesture (before any await), in one prompt — otherwise the first tooltip
+  // send or custom-model run would fail with a network error.
+  const webhookUrls = webhooks.map(w => w.url).filter(Boolean);
+  const customOriginList = customOrigins(modelConfigs);
+  const permissionsPromise = requestOriginPermissions([...webhookUrls, ...customOriginList]);
 
   // The all-sites grant/cleanup needs the same gesture — start before any
   // await too. Removing the broad https://*/* grant SUBTRACTS everything it
@@ -1093,10 +1152,16 @@ async function onSave() {
     } else if (!wantAllSites && floatingAllSitesStored) {
       await chrome.permissions.remove({ origins: ALL_SITE_ORIGINS }).catch(() => { /* keep the grant */ });
     }
-    await chrome.permissions.request({
-      origins: [...chrome.runtime.getManifest().host_permissions, ...domainOrigins]
-    }).catch(() => { /* gesture consumed by a prompt above — next save repairs */ });
-    return granted;
+    // Everything the remove may have subtracted, webhook origins included
+    const restored = await chrome.permissions.request({
+      origins: buildRestoreOrigins({
+        manifestHosts: chrome.runtime.getManifest().host_permissions,
+        domains: domainOrigins,
+        webhookUrls,
+        customOrigins: customOriginList
+      })
+    }).catch(() => false); // e.g. gesture consumed by a prompt above — next save repairs
+    return { granted, restored };
   })();
 
   // width/height are owned by the tooltip's resize handle (content.js), and
@@ -1113,7 +1178,7 @@ async function onSave() {
     height: currentTs.height
   };
 
-  const allSitesGranted = await allSitesPromise;
+  const { granted: allSitesGranted, restored: permissionsRestored } = await allSitesPromise;
   if (!allSitesGranted) floatingAllSites.checked = false;
 
   const floatingButtonSettings = {
@@ -1132,8 +1197,10 @@ async function onSave() {
     syncFloatingVisibility();
     const granted = await permissionsPromise;
     const warnings = [];
-    if (!granted) warnings.push('webhook origin permission not granted, sending will fail');
+    if (!granted && webhookUrls.length) warnings.push('webhook origin permission not granted, sending will fail');
+    if (!granted && customOriginList.length) warnings.push('custom endpoint permission not granted');
     if (wantAllSites && !allSitesGranted) warnings.push('all-sites permission denied — floating button stays per-domain');
+    if (!permissionsRestored) warnings.push('some permissions could not be restored — click Save again');
     showSaveStatus(warnings.length ? `Saved — ${warnings.join('; ')}` : 'Saved', warnings.length === 0);
   } catch (err) {
     await permissionsPromise.catch(() => {});
