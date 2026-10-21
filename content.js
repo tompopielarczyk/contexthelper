@@ -14,6 +14,21 @@
   let pendingClientId = null; // clientId of the spinner shown ahead of START
   const dismissedClientIds = new Set(); // dismissed before START arrived
   const MAX_DISMISSED_CLIENT_IDS = 20;
+  // AI_CHUNK carries only new text at an offset: chars of the active run's
+  // answer already shown, and whether a gap made the stream unusable (the
+  // run then waits for AI_RESULT, which carries the full text)
+  let streamShownLength = 0;
+  let streamDesynced = false;
+  // Watchdogs, so a lost message can never leave a spinner up forever. Never
+  // resend on expiry — only tell the user. Module-level (not activeCleanups):
+  // the first chunk's hideOverlay() must not clear them.
+  const START_WATCHDOG_MS = 20_000; // requestRun → its AI_PROCESSING_START
+  // The background sends AI_HEARTBEAT every 20 s (KEEPALIVE_INTERVAL_MS) for
+  // as long as a run is alive; 60 s of silence (no heartbeat, no chunk)
+  // means the worker died
+  const LIVENESS_TIMEOUT_MS = 60_000;
+  let startWatchdog = null;
+  let completionWatchdog = null;
 
   function isTextControl(el) {
     if (!el) return false;
@@ -69,9 +84,7 @@
         if (message.clientId && dismissedClientIds.has(message.clientId)) {
           // The user closed the early spinner — stop the run, show nothing
           dismissedClientIds.delete(message.clientId);
-          try {
-            chrome.runtime.sendMessage({ type: 'CANCEL_ACTION', requestId: message.requestId }).catch(() => {});
-          } catch { /* extension reloaded mid-session */ }
+          sendCancel(message.requestId);
           return;
         }
         // Another run took the screen before the pending request's START:
@@ -81,18 +94,38 @@
           markClientIdDismissed(pendingClientId);
         }
         pendingClientId = null;
-        if (message.requestId !== undefined) activeRequestId = message.requestId;
+        clearStartWatchdog();
+        if (message.requestId !== undefined) {
+          activeRequestId = message.requestId;
+          armCompletionWatchdog(message.requestId, ts);
+        }
+        streamShownLength = 0;
+        streamDesynced = false;
         activeSelectionSnapshot = captureInsertionSnapshot();
         hideFloatingButton();
         showLoading(ts);
         break;
+      case 'AI_HEARTBEAT':
+        if (activeRequestId === null || message.requestId !== activeRequestId) return;
+        armCompletionWatchdog(activeRequestId, ts); // the run is alive
+        break;
       case 'AI_CHUNK':
         if (activeRequestId === null || message.requestId !== activeRequestId) return;
-        showStreamingTooltip(message.text, ts);
+        armCompletionWatchdog(activeRequestId, ts); // the run is alive
+        if (streamDesynced || typeof message.delta !== 'string' || !message.delta) return;
+        if (message.offset !== streamShownLength) {
+          // A lost or reordered chunk (never expected: the background sends
+          // in order) — stop appending and let AI_RESULT show the full text
+          streamDesynced = true;
+          return;
+        }
+        streamShownLength += message.delta.length;
+        showStreamingTooltip(message.delta, ts);
         break;
       case 'AI_RESULT': {
         if (activeRequestId === null || message.requestId !== activeRequestId) return;
         activeRequestId = null; // run finished — later messages for it are stale
+        clearCompletionWatchdog();
         // Read before hideOverlay() removes the streaming tooltip, so the
         // result opens where the stream was
         const position = getStreamingPosition();
@@ -123,6 +156,7 @@
       case 'AI_ERROR': {
         if (activeRequestId === null || message.requestId !== activeRequestId) return;
         activeRequestId = null;
+        clearCompletionWatchdog();
         const position = getStreamingPosition();
         hideOverlay();
         showErrorTooltip(message.message, ts, {
@@ -292,9 +326,10 @@
     el.appendChild(closeBtn);
     appendAndClampOverlay(el, pos);
 
-    // Esc, ✕ or a click outside cancels the run
+    // Only Esc or ✕ cancels the run. A click on the page (e.g. back into the
+    // textarea an insert-mode run will write to) must not throw away a
+    // request whose tokens are already being spent.
     addEscHandler(cancelActiveRun);
-    addOutsideClickHandler(cancelActiveRun);
   }
 
   function addEscHandler(onEscape) {
@@ -325,9 +360,7 @@
   function cancelActiveRun() {
     const requestId = activeRequestId;
     if (requestId !== null) {
-      try {
-        chrome.runtime.sendMessage({ type: 'CANCEL_ACTION', requestId }).catch(() => {});
-      } catch { /* extension reloaded mid-session */ }
+      sendCancel(requestId);
     } else if (pendingClientId !== null) {
       // START not here yet — remember the id so that START cancels the run
       markClientIdDismissed(pendingClientId);
@@ -335,7 +368,44 @@
     pendingClientId = null;
     activeRequestId = null;
     activeSelectionSnapshot = null;
+    clearStartWatchdog();
+    clearCompletionWatchdog();
     hideOverlay();
+  }
+
+  // Ask the background to abort a run (it ignores ids it no longer runs)
+  function sendCancel(requestId) {
+    try {
+      chrome.runtime.sendMessage({ type: 'CANCEL_ACTION', requestId }).catch(() => {});
+    } catch { /* extension reloaded mid-session */ }
+  }
+
+  function clearStartWatchdog() {
+    clearTimeout(startWatchdog);
+    startWatchdog = null;
+  }
+
+  function clearCompletionWatchdog() {
+    clearTimeout(completionWatchdog);
+    completionWatchdog = null;
+  }
+
+  // Liveness watchdog: (re)armed by START and by every heartbeat or chunk
+  // of the active run; cleared by its result, error or cancellation. There
+  // is no overall deadline — a long reasoning run stays alive while the
+  // background keeps beating. Expiry cancels the run in the background
+  // (no more tokens spent if it is somehow still going), drops it here
+  // (late messages for it are then ignored) and says so. Never resends.
+  function armCompletionWatchdog(requestId, ts) {
+    clearCompletionWatchdog();
+    completionWatchdog = setTimeout(() => {
+      completionWatchdog = null;
+      if (activeRequestId !== requestId) return;
+      sendCancel(requestId);
+      activeRequestId = null;
+      activeSelectionSnapshot = null;
+      showErrorTooltip('No response — the request may have been interrupted', ts);
+    }, LIVENESS_TIMEOUT_MS);
   }
 
   function markClientIdDismissed(clientId) {
@@ -364,9 +434,10 @@
     return { width, height: storedHeight || 200 };
   }
 
-  // Live view of a streaming answer: created on the first chunk, then only
-  // its text changes. Plain text (markdown renders once the result arrives).
-  function showStreamingTooltip(text, ts) {
+  // Live view of a streaming answer: created on the first chunk, then each
+  // chunk's delta is appended. Plain text (markdown renders once the result
+  // arrives).
+  function showStreamingTooltip(delta, ts) {
     ensureShadowHost();
     let el = shadowRoot.querySelector('.cmn-streaming');
     if (!el) {
@@ -396,29 +467,22 @@
       el.appendChild(content);
       appendAndClampOverlay(el, getPosition(ts?.position, size));
 
+      // Like the spinner: only Esc or ✕ stops the stream, never an outside click
       addEscHandler(cancelActiveRun);
-      addOutsideClickHandler(cancelActiveRun);
     }
 
     const content = el.querySelector('.cmn-stream-content');
     // Follow the text only when the reader is already at the bottom
     const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight <= 24;
-    renderStreamDelta(el.querySelector('.cmn-stream-text'), text);
+    renderStreamDelta(el.querySelector('.cmn-stream-text'), delta);
     if (atBottom) content.scrollTop = content.scrollHeight;
     clampOverlay(el); // the tooltip grows while text arrives
   }
 
-  // Chunks carry the accumulated text: append only the new part, fading it
-  // in. A finished fade turns its span back into plain text, so a long
-  // stream doesn't leave thousands of spans behind. Anything that isn't a
-  // pure append (never expected) re-renders the whole text.
-  function renderStreamDelta(textEl, text) {
-    const shown = textEl.textContent;
-    if (!text.startsWith(shown)) {
-      textEl.textContent = text;
-      return;
-    }
-    const delta = text.slice(shown.length);
+  // Append a chunk's new text, fading it in. A finished fade turns its span
+  // back into plain text, so a long stream doesn't leave thousands of spans
+  // behind.
+  function renderStreamDelta(textEl, delta) {
     if (!delta) return;
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
       textEl.appendChild(document.createTextNode(delta));
@@ -541,9 +605,21 @@
     const clientId = newClientId();
     showLoading(ts);
     pendingClientId = clientId;
+    // Every background path must answer with START; if none comes, the
+    // request was lost — show an error instead of spinning forever, and
+    // mark the id dismissed so a very late START only cancels the run
+    clearStartWatchdog(); // a previous request was superseded
+    startWatchdog = setTimeout(() => {
+      startWatchdog = null;
+      if (pendingClientId !== clientId) return; // dismissed or superseded
+      pendingClientId = null;
+      markClientIdDismissed(clientId);
+      showErrorTooltip('The request did not start — try again', ts);
+    }, START_WATCHDOG_MS);
     const fail = () => {
       if (pendingClientId !== clientId) return; // dismissed or superseded
       pendingClientId = null;
+      clearStartWatchdog();
       showErrorTooltip('Extension unavailable — try reloading the page', ts);
     };
     try {

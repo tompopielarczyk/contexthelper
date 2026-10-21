@@ -162,9 +162,141 @@ test('done with empty text rejects with the empty-response message', async (t) =
 test('idle stall rejects', async (t) => {
   stubFetch(t, () => streamResponse([], { hang: true }));
   await assert.rejects(
-    callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {}, streamTimeouts: { idleMs: 20, totalMs: 1000 } }),
+    callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {}, streamTimeouts: { preAnswerIdleMs: 20, idleMs: 20, totalMs: 1000 } }),
     /stalled/
   );
+});
+
+// Body that enqueues each step after its delay (ms from the previous step),
+// then hangs or closes
+function timedStreamResponse(steps, { hang = false } = {}) {
+  const timers = [];
+  const body = new ReadableStream({
+    start(controller) {
+      let at = 0;
+      for (const [delay, chunk] of steps) {
+        at += delay;
+        timers.push(setTimeout(() => controller.enqueue(encoder.encode(chunk)), at));
+      }
+      if (!hang) timers.push(setTimeout(() => controller.close(), at + 1));
+    },
+    cancel() { timers.forEach(clearTimeout); }
+  });
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+test('a silent wait longer than idleMs before the first answer text resolves', async (t) => {
+  // Reasoning models think for a while after the role chunk
+  stubFetch(t, () => timedStreamResponse([
+    [0, sse({ choices: [{ delta: { role: 'assistant' }, finish_reason: null }] })],
+    [80, chatDelta('Hi')],
+    [5, sse({ choices: [{ delta: {}, finish_reason: 'stop' }] })]
+  ]));
+  const result = await callAI({
+    provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+    streamTimeouts: { preAnswerIdleMs: 500, idleMs: 30, totalMs: 2000 }
+  });
+  assert.equal(result, 'Hi');
+});
+
+test('keep-alive bytes reset the pre-answer inactivity limit', async (t) => {
+  stubFetch(t, () => timedStreamResponse([
+    [0, ': ping\n\n'], [40, ': ping\n\n'], [40, ': ping\n\n'], [40, ': ping\n\n'],
+    [40, anthropicDelta('ok')],
+    [5, sse({ type: 'message_stop' }, 'message_stop')]
+  ]));
+  const result = await callAI({
+    provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+    streamTimeouts: { preAnswerIdleMs: 80, idleMs: 10, totalMs: 2000 }
+  });
+  assert.equal(result, 'ok');
+});
+
+test('no bytes before preAnswerIdleMs rejects as stalled', async (t) => {
+  stubFetch(t, () => timedStreamResponse([
+    [0, sse({ choices: [{ delta: { role: 'assistant' }, finish_reason: null }] })]
+  ], { hang: true }));
+  await assert.rejects(
+    callAI({
+      provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+      streamTimeouts: { preAnswerIdleMs: 40, idleMs: 1000, totalMs: 2000 }
+    }),
+    /stalled/
+  );
+});
+
+test('a pause longer than idleMs after the first answer text rejects', async (t) => {
+  stubFetch(t, () => timedStreamResponse([
+    [0, chatDelta('Hel')],
+    [100, chatDelta('lo')]
+  ], { hang: true }));
+  await assert.rejects(
+    callAI({
+      provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+      streamTimeouts: { preAnswerIdleMs: 1000, idleMs: 30, totalMs: 2000 }
+    }),
+    /stalled/
+  );
+});
+
+test('the total limit also bounds the pre-answer phase', async (t) => {
+  stubFetch(t, () => {
+    let timer;
+    const body = new ReadableStream({
+      start(controller) {
+        timer = setInterval(() => controller.enqueue(encoder.encode(': ping\n\n')), 5);
+      },
+      cancel() { clearInterval(timer); }
+    });
+    return new Response(body, { status: 200 });
+  });
+  await assert.rejects(
+    callAI({
+      provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+      streamTimeouts: { preAnswerIdleMs: 1000, idleMs: 1000, totalMs: 40 }
+    }),
+    /took too long/
+  );
+});
+
+test('anthropic thinking, signature and ping events are not answer text', async (t) => {
+  for (const delta of [{ type: 'thinking_delta', thinking: 'hmm' }, { type: 'signature_delta', signature: 'sig' }]) {
+    assert.deepEqual(parseStreamEvent('anthropic', { type: 'content_block_delta', delta }), { delta: '', done: false, error: null });
+  }
+  stubFetch(t, () => streamResponse([
+    sse({ type: 'ping' }, 'ping'),
+    sse({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'secret' } }, 'content_block_delta'),
+    sse({ type: 'content_block_delta', delta: { type: 'signature_delta', signature: 'sig' } }, 'content_block_delta'),
+    anthropicDelta('Answer'),
+    sse({ type: 'message_stop' }, 'message_stop')
+  ]));
+  const deltas = [];
+  const result = await callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: d => deltas.push(d) });
+  assert.equal(result, 'Answer');
+  assert.deepEqual(deltas, ['Answer']);
+});
+
+test('gemini thought parts are not answer text', async (t) => {
+  assert.equal(
+    parseStreamEvent('google', { candidates: [{ content: { parts: [{ text: 'thinking…', thought: true }, { text: 'Answer' }] } }] }).delta,
+    'Answer'
+  );
+  assert.equal(
+    extractGeminiText({ candidates: [{ content: { parts: [{ text: 'plan', thought: true }, { text: 'Final' }] } }] }),
+    'Final'
+  );
+  assert.throws(
+    () => extractGeminiText({ candidates: [{ content: { parts: [{ text: 'only thoughts', thought: true }] }, finishReason: 'MAX_TOKENS' }] }),
+    /empty response \(MAX_TOKENS\)/
+  );
+  stubFetch(t, () => streamResponse([
+    sse({ candidates: [{ content: { parts: [{ text: 'reasoning', thought: true }] } }] }),
+    sse({ candidates: [{ content: { parts: [{ text: 'Done' }] }, finishReason: 'STOP' }] })
+  ]));
+  const deltas = [];
+  const result = await callAI({ provider: 'google', apiKey: 'k', model: 'm', prompt: 'p', onDelta: d => deltas.push(d) });
+  assert.equal(result, 'Done');
+  assert.deepEqual(deltas, ['Done']);
 });
 
 test('total timeout rejects even while bytes keep arriving', async (t) => {
@@ -219,7 +351,7 @@ test('non-streaming request unchanged', async (t) => {
   assert.equal('stream' in calls[0].body, false);
   assert.deepEqual(calls[0].body, {
     model: 'm',
-    max_completion_tokens: 4096,
+    max_completion_tokens: 16000,
     temperature: 0.3,
     messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'p' }]
   });
@@ -333,7 +465,7 @@ test('openai request uses max_completion_tokens', async (t) => {
   const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), { status: 200 }));
   await callAI({ provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p' });
   assert.equal(calls[0].url, 'https://api.openai.com/v1/chat/completions');
-  assert.equal(calls[0].body.max_completion_tokens, 4096);
+  assert.equal(calls[0].body.max_completion_tokens, 16000);
   assert.equal('max_tokens' in calls[0].body, false);
 });
 
@@ -377,6 +509,26 @@ test('isPrivateHost covers loopback, mDNS and RFC 1918 ranges only', () => {
     assert.equal(isPrivateHost(h), true, h);
   for (const h of ['example.com', '172.15.0.1', '172.32.0.1', '192.169.0.1', '11.0.0.1', 'localhost.example.com', '8.8.8.8'])
     assert.equal(isPrivateHost(h), false, h);
+});
+
+test('isPrivateHost accepts LAN and VPN hosts', () => {
+  for (const h of ['gpu-box', 'nas', 'box1', '100.64.0.0', '100.100.1.2', '100.127.255.255', '169.254.0.1', '169.254.255.255',
+    'ollama.internal', 'x.lan', 'printer.home.arpa', 'GPU-Box'])
+    assert.equal(isPrivateHost(h), true, h);
+});
+
+test('isPrivateHost rejects near misses, malformed and spoofed hosts', () => {
+  for (const h of ['100.63.255.255', '100.128.0.0', '100.128.0.1', '169.255.0.1', '169.253.255.255',
+    '300.1.1.1', '100.64.0.256', 'evil.lan.example.com', 'lan.example.com', 'x.internal.example.com', 'home.arpa.evil.com',
+    '', '-bad', 'bad-', 'a_b', 'a b', '.', 'x.', '300', '0x7f', '[fd00::1]', 'fe80::1', '[::]', null, undefined])
+    assert.equal(isPrivateHost(h), false, String(h));
+});
+
+test('normalizeBaseUrl accepts plain http for LAN and VPN hosts', () => {
+  assert.equal(normalizeBaseUrl('http://gpu-box:11434/v1'), 'http://gpu-box:11434/v1');
+  assert.equal(normalizeBaseUrl('http://100.101.102.103:1234/v1/'), 'http://100.101.102.103:1234/v1');
+  assert.equal(normalizeBaseUrl('http://llm.home.arpa/v1'), 'http://llm.home.arpa/v1');
+  assert.throws(() => normalizeBaseUrl('http://evil.lan.example.com/v1'), /HTTPS/);
 });
 
 test('custom provider: no auth header without key, defaults', async (t) => {
@@ -526,4 +678,81 @@ test('openai stream chunk with finish_reason length counts as done', async (t) =
     streamTimeouts: { idleMs: 1000, totalMs: 2000 }
   });
   assert.equal(result, 'cut off');
+});
+
+// ── Temperature fallback and token budget (Revision 3, item 10) ──
+
+const TEMPERATURE_400 = { error: { message: "Unsupported value: 'temperature' does not support 0.3 with this model. Only the default (1) value is supported." } };
+const jsonResponse = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+const okChat = (content) => jsonResponse(200, { choices: [{ message: { content }, finish_reason: 'stop' }] });
+
+test('a temperature 400 is retried once without temperature, and the model is remembered', async (t) => {
+  let n = 0;
+  const calls = stubFetch(t, () => (++n === 1 ? jsonResponse(400, TEMPERATURE_400) : okChat('ok')));
+  assert.equal(await callAI({ provider: 'openai', apiKey: 'k', model: 'reasoner-a', prompt: 'p' }), 'ok');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.temperature, 0.3);
+  assert.equal('temperature' in calls[1].body, false);
+
+  // Same url + model: no temperature from the first request on
+  assert.equal(await callAI({ provider: 'openai', apiKey: 'k', model: 'reasoner-a', prompt: 'p' }), 'ok');
+  assert.equal(calls.length, 3);
+  assert.equal('temperature' in calls[2].body, false);
+});
+
+test('the temperature fallback also covers streaming and other chat-completions providers', async (t) => {
+  let n = 0;
+  const calls = stubFetch(t, () => (++n === 1
+    ? jsonResponse(400, TEMPERATURE_400)
+    : streamResponse([chatDelta('hi'), sse({ choices: [{ delta: {}, finish_reason: 'stop' }] })])));
+  const result = await callAI({ provider: 'openrouter', apiKey: 'k', model: 'reasoner-stream', prompt: 'p', onDelta: () => {} });
+  assert.equal(result, 'hi');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].body.stream, true);
+  assert.equal('temperature' in calls[1].body, false);
+});
+
+test('an unrelated 400 is not retried', async (t) => {
+  const calls = stubFetch(t, () => jsonResponse(400, { error: { message: 'Invalid messages array' } }));
+  await assert.rejects(callAI({ provider: 'openai', apiKey: 'k', model: 'reasoner-b', prompt: 'p' }), /Invalid messages array/);
+  assert.equal(calls.length, 1);
+});
+
+test('two temperature 400s in a row reject after two calls', async (t) => {
+  const calls = stubFetch(t, () => jsonResponse(400, TEMPERATURE_400));
+  await assert.rejects(callAI({ provider: 'custom', apiKey: '', baseUrl: 'http://localhost:1234/v1', model: 'reasoner-c', prompt: 'p' }), /temperature/);
+  assert.equal(calls.length, 2);
+});
+
+test('OpenAI gets a 16 000 token budget, OpenRouter keeps max_tokens 4096', async (t) => {
+  const calls = stubFetch(t, () => okChat('ok'));
+  await callAI({ provider: 'openai', apiKey: 'k', model: 'gpt-x', prompt: 'p' });
+  await callAI({ provider: 'openrouter', apiKey: 'k', model: 'some/model', prompt: 'p' });
+  assert.equal(calls[0].body.max_completion_tokens, 16000);
+  assert.equal(calls[1].body.max_tokens, 4096);
+  assert.equal('max_completion_tokens' in calls[1].body, false);
+});
+
+// ── Default models and fallback lists (Revision 3, item 11) ──
+
+test('getDefaultModel per provider', () => {
+  assert.equal(getDefaultModel('anthropic'), 'claude-sonnet-5-5');
+  assert.equal(getDefaultModel('openai'), 'gpt-6-luna');
+  assert.equal(getDefaultModel('openrouter'), 'openai/gpt-6-luna');
+  assert.equal(getDefaultModel('google'), 'gemini-3.5-flash-lite');
+  assert.equal(getDefaultModel('deepl'), '');
+  assert.equal(getDefaultModel('custom'), '');
+});
+
+test('fallback model lists carry the current models and include each default', () => {
+  const ids = (provider) => getAvailableModels(provider).map(m => m.id);
+  assert.deepEqual(ids('anthropic'), ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5']);
+  assert.deepEqual(ids('openai'), ['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.4-mini']);
+  assert.deepEqual(ids('google'), ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash']);
+  const openrouter = ids('openrouter');
+  assert.deepEqual(openrouter.slice(0, 3), ['anthropic/claude-sonnet-5.5', 'openai/gpt-6-luna', 'google/gemini-3.8-flash']);
+  assert.ok(openrouter.includes('deepseek/deepseek-v3.2') && openrouter.includes('stepfun/step-3.5-flash'));
+  assert.equal(openrouter.length, 11);
+  for (const provider of ['anthropic', 'openai', 'openrouter', 'google'])
+    assert.ok(ids(provider).includes(getDefaultModel(provider)), provider);
 });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { saveSettings, customOrigins } from '../lib/storage.js';
+import { saveSettings, customOrigins, getSettings } from '../lib/storage.js';
 
 function validSettings(overrides = {}) {
   return {
@@ -233,3 +233,26 @@ test('customOrigins dedupes and skips invalid', () => {
   ]), ['http://localhost:11434/*', 'https://vllm.example.com/*']);
   assert.deepEqual(customOrigins(undefined), []);
 });
+
+// Legacy single-provider data without a model: the migrated config gets the
+// provider's current default model
+for (const [provider, model] of [
+  ['anthropic', 'claude-sonnet-5-5'],
+  ['openai', 'gpt-6-luna'],
+  ['openrouter', 'openai/gpt-6-luna'],
+  ['google', 'gemini-3.5-flash-lite']
+]) {
+  test(`legacy ${provider} migration uses the current default model`, async () => {
+    const stored = { sync: { provider }, local: { apiKey: 'k' } };
+    const area = (name) => ({
+      get: async (defaults) => ({ ...defaults, ...stored[name] }),
+      set: async (payload) => Object.assign(stored[name], payload),
+      remove: async (keys) => { for (const k of keys) delete stored[name][k]; }
+    });
+    globalThis.chrome = { storage: { sync: area('sync'), local: area('local') } };
+    const settings = await getSettings();
+    assert.equal(settings.modelConfigs.length, 1);
+    assert.equal(settings.modelConfigs[0].provider, provider);
+    assert.equal(settings.modelConfigs[0].model, model);
+  });
+}

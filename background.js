@@ -3,10 +3,11 @@ import { callAI } from './lib/api-client.js';
 import { sendWebhook, renderTemplate } from './lib/webhook.js';
 import {
   shouldStream, createThrottle, isRetryableError,
-  ASK_ACTION_ID, pickLLMConfig, sanitizeConversation, buildRefineMessages,
-  resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError
+  ASK_ACTION_ID, pickLLMConfig, resolveActionConfig, sanitizeConversation, buildRefineMessages,
+  resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError, nextChunk
 } from './lib/chat.js';
 import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
+import { probeSelection, SELECTION_RULES } from './lib/page-probe.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
 const FLOATING_MENU_ID = 'contexthelper-floating-toggle';
@@ -19,7 +20,13 @@ let _menuRebuildQueue = Promise.resolve();
 const _abortControllersByTab = new Map();
 
 const CHUNK_THROTTLE_MS = 100;
+// Every 20 s while a run is in flight: an extension API call resets the
+// worker's idle timer, and AI_HEARTBEAT tells the page the run is alive
+// (content.js gives up after LIVENESS_TIMEOUT_MS without one)
 const KEEPALIVE_INTERVAL_MS = 20_000;
+const SENSITIVE_FIELD_MESSAGE = 'ContextHelper does not send password or payment fields';
+const ACTION_MODEL_REMOVED_MESSAGE = "This action's model was removed — pick another in settings";
+const NO_MODEL_MESSAGE = 'No model configured. Please add a model in the extension settings.';
 
 // Must register listeners synchronously — survives service worker restarts
 chrome.contextMenus.onClicked.addListener(handleMenuClick);
@@ -168,14 +175,6 @@ function resolveActionByMenuId(actions, menuItemId) {
   return actions.find((action, index) => (action.id || `legacy-action-${index}`) === match[1]) || null;
 }
 
-function resolveModelConfig(configs, configId) {
-  if (!configs?.length) return null;
-  if (configId) {
-    return configs.find(c => c.id === configId) || null;
-  }
-  return configs[0];
-}
-
 // Manual delivery triggered by the send button in the result tooltip.
 async function handleSendWebhook({ webhookId, webhookData }) {
   try {
@@ -205,7 +204,9 @@ async function handleMenuClick(info, tab) {
 
   if (info.menuItemId === ASK_MENU_ID) {
     if (!info.selectionText?.trim()) return;
-    await showAskPrompt(tab, info.selectionText, await getSettings());
+    const settings = await getSettings();
+    if (await blockSensitiveMenuSelection(info, tab, settings)) return;
+    await showAskPrompt(tab, info.selectionText, settings);
     return;
   }
 
@@ -214,8 +215,22 @@ async function handleMenuClick(info, tab) {
   if (!action) return;
 
   if (!info.selectionText?.trim()) return;
+  if (await blockSensitiveMenuSelection(info, tab, settings)) return;
 
   await runAction(action, { selectionText: info.selectionText, editable: info.editable }, tab, settings);
+}
+
+// info.selectionText of an editable selection may come from a password or
+// payment field. Probe the focused field in the frame that was clicked and
+// stop with a notice when it is sensitive — or when we can't tell (fail
+// closed): the frame can't be probed, or the probe didn't reach an editable
+// element (e.g. focus on the host of a closed shadow root).
+async function blockSensitiveMenuSelection(info, tab, settings) {
+  if (!info.editable) return false;
+  const probe = await runSelectionProbe(tab.id, { frameId: info.frameId ?? 0 });
+  if (probe && probe.inspected && !probe.sensitive) return false;
+  await showTabNotice(tab.id, SENSITIVE_FIELD_MESSAGE, settings);
+  return true;
 }
 
 function floatingOriginsForHost(host) {
@@ -298,16 +313,22 @@ async function handleRunAction({ actionId, selectionText, editable }, sender) {
   await runAction(action, { selectionText, editable }, tab, settings);
 }
 
+// Abort the run that owns the tab, if any. A run's own `finally` only
+// clears the map entry while it still holds its controller (identity check),
+// so a newer run's entry is never removed by an older run.
+function abortTabRun(tabId) {
+  const running = _abortControllersByTab.get(tabId);
+  if (!running) return;
+  running.controller.abort();
+  _abortControllersByTab.delete(tabId);
+}
+
 // Error tooltip outside the AI flow — content.js gates AI_ERROR on the
 // requestId set by AI_PROCESSING_START, so the notice needs the full pair.
 async function showTabNotice(tabId, message, settings, clientId = null) {
   // The notice replaces whatever the tab shows — stop a run still in flight
   // there, or it keeps spending tokens for a result nobody will see
-  const running = _abortControllersByTab.get(tabId);
-  if (running) {
-    running.controller.abort();
-    _abortControllersByTab.delete(tabId);
-  }
+  abortTabRun(tabId);
   if (!await ensureContentScript(tabId)) return;
   const requestId = crypto.randomUUID();
   const ok = await sendToTab(tabId, {
@@ -407,8 +428,11 @@ async function handleRefine({ actionId, conversation, preset, instruction, sourc
     if (!isAsk && !action) throw new Error('Action no longer exists');
     const config = isAsk
       ? pickLLMConfig(settings.modelConfigs)
-      : pickLLMConfig(settings.modelConfigs, action.modelConfigId);
-    if (!config) throw new Error('No LLM model configured');
+      : resolveActionConfig(settings.modelConfigs, action);
+    if (!config) {
+      if (isAsk) throw new Error('No LLM model configured');
+      throw new Error(action.modelConfigId ? ACTION_MODEL_REMOVED_MESSAGE : NO_MODEL_MESSAGE);
+    }
     if (config.provider === 'deepl') throw new Error('Refine is not available for DeepL');
     const keyError = missingApiKeyError(config);
     if (keyError) throw new Error(keyError);
@@ -492,6 +516,11 @@ async function handleCommand(command, tab) {
   const selection = await getSelectionFromTab(tab.id);
   if (!selection) return; // restricted page (chrome://, Web Store, ...)
 
+  // Before the empty check: a sensitive field reports no text
+  if (selection.sensitive) {
+    await showTabNotice(tab.id, SENSITIVE_FIELD_MESSAGE, settings);
+    return;
+  }
   if (!selection.text.trim()) {
     await showTabNotice(tab.id, 'Select some text first', settings);
     return;
@@ -510,6 +539,10 @@ async function handleAskCommand(tab) {
   const selection = await getSelectionFromTab(tab.id);
   if (!selection) return; // restricted page
 
+  if (selection.sensitive) {
+    await showTabNotice(tab.id, SENSITIVE_FIELD_MESSAGE, settings);
+    return;
+  }
   if (!selection.text.trim()) {
     await showTabNotice(tab.id, 'Select some text first', settings);
     return;
@@ -529,11 +562,7 @@ async function showAskPrompt(tab, selectionText, settings) {
   // A run still starting up (before its AI_PROCESSING_START) is unknown to
   // the content script's cancel — abort it here, or its START would replace
   // the input. runChat re-checks signal.aborted after every await.
-  const running = _abortControllersByTab.get(tab.id);
-  if (running) {
-    running.controller.abort();
-    _abortControllersByTab.delete(tab.id);
-  }
+  abortTabRun(tab.id);
   if (!await ensureContentScript(tab.id)) return;
   await sendToTab(tab.id, {
     type: 'ASK_PROMPT',
@@ -592,9 +621,9 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
   // context captured with the original selection instead of re-reading the page
   const retrySpec = { kind: 'action', actionId: action.id, selectionText, editable: !!editable };
   return runChat(tab, settings, async () => {
-    const config = resolveModelConfig(settings.modelConfigs, action.modelConfigId);
+    const config = resolveActionConfig(settings.modelConfigs, action);
     if (!config) {
-      throw new Error('No model configured. Please add a model in the extension settings.');
+      throw new Error(action.modelConfigId ? ACTION_MODEL_REMOVED_MESSAGE : NO_MODEL_MESSAGE);
     }
     // Custom endpoints (Ollama, LM Studio) may run without a key
     const keyError = missingApiKeyError(config);
@@ -642,8 +671,7 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
  *   run it dismissed before the START arrived
  */
 async function runChat(tab, settings, buildRequest, retrySpec = null, clientId = null) {
-  const previous = _abortControllersByTab.get(tab.id);
-  if (previous) previous.controller.abort();
+  abortTabRun(tab.id); // one run per tab
 
   // UUIDs, not a counter: the content script outlives a worker restart and
   // must never match a stale id from the previous worker
@@ -658,19 +686,45 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
   let partialText = '';
   let throttle = null;
   let keepalive = null;
+  let sentLength = 0; // chars of the streamed answer already sent as AI_CHUNK
+
+  // Every message of this run goes through one promise chain, so the tab
+  // receives them in issue order: no chunk can overtake AI_RESULT/AI_ERROR
+  let sendChain = Promise.resolve();
+  const send = (message) => (sendChain = sendChain.then(() => sendToTab(tab.id, message)));
+
+  // Heartbeats stop before the terminal message is enqueued, and one that
+  // was already queued becomes a no-op once the run ended (or was aborted),
+  // so AI_HEARTBEAT can never follow AI_RESULT / AI_ERROR
+  let ended = false;
+  const stopHeartbeat = () => {
+    ended = true;
+    clearInterval(keepalive);
+  };
+  const sendHeartbeat = () => (sendChain = sendChain.then(() =>
+    ended || signal.aborted ? false : sendToTab(tab.id, { type: 'AI_HEARTBEAT', requestId })));
 
   try {
     const contentReady = await ensureContentScript(tab.id);
     if (!contentReady || signal.aborted) return;
 
     // Notify content script: show loading indicator before spending tokens.
-    canReportToTab = await sendToTab(tab.id, {
+    canReportToTab = await send({
       type: 'AI_PROCESSING_START',
       requestId,
       clientId,
       tooltipSettings
     });
     if (!canReportToTab || signal.aborted) return;
+
+    // From START on: keep the worker alive (extension API calls reset its
+    // idle timer) and tell the page the run is still going — reasoning
+    // models can think for minutes without a single chunk. Heartbeats go
+    // through the same ordered chain as every other message of the run.
+    keepalive = setInterval(() => {
+      chrome.runtime.getPlatformInfo().catch(() => {});
+      if (!ended && !signal.aborted) sendHeartbeat();
+    }, KEEPALIVE_INTERVAL_MS);
 
     const request = await buildRequest();
     if (signal.aborted) return;
@@ -679,16 +733,15 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     const isDeepL = config.provider === 'deepl';
     const streaming = shouldStream({ provider: config.provider, displayMode, editable });
     if (streaming) {
+      // Chunks carry only the new text and its offset (the page appends);
+      // resending the accumulated text would make the traffic quadratic
       throttle = createThrottle(text => {
-        sendToTab(tab.id, { type: 'AI_CHUNK', requestId, text, tooltipSettings });
+        const chunk = nextChunk(sentLength, text);
+        if (!chunk) return;
+        sentLength += chunk.delta.length;
+        send({ type: 'AI_CHUNK', requestId, offset: chunk.offset, delta: chunk.delta, tooltipSettings });
       }, CHUNK_THROTTLE_MS);
     }
-
-    // A long stream can outlive the idle limit of the service worker;
-    // extension API calls reset that timer
-    keepalive = setInterval(() => {
-      chrome.runtime.getPlatformInfo().catch(() => {});
-    }, KEEPALIVE_INTERVAL_MS);
 
     aiCallStarted = true;
     const result = await callAI({
@@ -710,12 +763,15 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     });
 
     if (signal.aborted) return;
-    throttle?.flush();
+    // Cancel, never flush: AI_RESULT carries the full text, and a last chunk
+    // would flash the streaming tooltip for an answer that finished fast
     throttle?.cancel();
+    stopHeartbeat();
 
     const conversationBase = messages?.length ? messages : [{ role: 'user', content: prompt }];
 
-    await sendToTab(tab.id, {
+    // Queued behind any chunk still in flight (see send)
+    await send({
       type: 'AI_RESULT',
       requestId,
       text: result,
@@ -741,9 +797,10 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
   } catch (err) {
     // Never flush here: a late chunk after AI_ERROR would re-open the stream view
     throttle?.cancel();
+    stopHeartbeat();
     if (signal.aborted) return;
     if (!canReportToTab) return;
-    await sendToTab(tab.id, {
+    await send({
       type: 'AI_ERROR',
       requestId,
       message: err?.message || 'An unknown error occurred',
@@ -752,112 +809,58 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
       tooltipSettings
     });
   } finally {
-    clearInterval(keepalive);
+    stopHeartbeat(); // safety net (early returns, aborts)
     if (_abortControllersByTab.get(tab.id)?.controller === controller) {
       _abortControllersByTab.delete(tab.id);
     }
   }
 }
 
-async function getSelectionFromTab(tabId) {
+/**
+ * Run probeSelection (lib/page-probe.js) in the tab's top frame, or in
+ * `frameId`. Null when the page or frame can't be scripted (chrome://,
+ * Web Store, a frame without access).
+ * @returns {Promise<{ text, editable, sensitive, blockText, start, end, title, url } | null>}
+ */
+async function runSelectionProbe(tabId, { frameId = null, withContext = false } = {}) {
   try {
     const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        const el = document.activeElement;
-        const isTextControl = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
-        if (isTextControl) {
-          // Never send a password or payment field to the provider (same rule as getPageContext)
-          const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
-          const sensitive = autocomplete.includes('password')
-            || autocomplete.split(/\s+/).some(token => token.startsWith('cc-'));
-          const textType = el.tagName === 'TEXTAREA'
-            || ['text', 'search', 'url', 'email', 'tel'].includes((el.type || '').toLowerCase());
-          if (sensitive || !textType) return { text: '', editable: false };
-          let start = null;
-          let end = null;
-          try {
-            start = el.selectionStart;
-            end = el.selectionEnd;
-          } catch { /* no text selection */ }
-          if (start != null && end != null && end > start) {
-            return {
-              text: el.value.slice(start, end),
-              editable: !el.readOnly && !el.disabled
-            };
-          }
-        }
-        const text = window.getSelection()?.toString() || '';
-        return { text, editable: !!(el && el.isContentEditable) };
-      }
+      target: frameId === null ? { tabId } : { tabId, frameIds: [frameId] },
+      func: probeSelection,
+      args: [SELECTION_RULES, withContext]
     });
     return results?.[0]?.result ?? null;
   } catch {
-    // Restricted page (chrome://, about:, etc.)
     return null;
   }
 }
 
 /**
+ * The selection for the keyboard paths: `{ text, editable, sensitive }`, or
+ * null on a restricted page. `sensitive` = a password or payment field has
+ * focus (its text is never read).
+ */
+async function getSelectionFromTab(tabId) {
+  const probe = await runSelectionProbe(tabId);
+  if (!probe) return null;
+  return { text: probe.text || '', editable: !!probe.editable, sensitive: !!probe.sensitive };
+}
+
+/**
  * Page context for {{context}} / {{pageTitle}} / {{pageUrl}}: the selection's
  * surrounding block (windowed around the selection), plus title and URL.
- * Restricted pages or a throw fall back to '' context and the tab's title/url.
+ * Restricted pages fall back to '' context and the tab's title/url; a
+ * sensitive field gives '' context.
  */
 async function getPageContext(tab) {
   const fallback = { context: '', pageTitle: tab.title || '', pageUrl: tab.url || '' };
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        const title = document.title;
-        const url = location.href;
-        const el = document.activeElement;
-        const isTextControl = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
-        if (isTextControl) {
-          let start = null;
-          let end = null;
-          try {
-            // Throws on input types without a text selection (e.g. number)
-            start = el.selectionStart;
-            end = el.selectionEnd;
-          } catch { /* no text selection */ }
-          if (start != null && end != null && end > start) {
-            // Never send the whole value of a password or payment field
-            const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
-            const sensitive = autocomplete.includes('password')
-              || autocomplete.split(/\s+/).some(token => token.startsWith('cc-'));
-            const textType = el.tagName === 'TEXTAREA'
-              || ['text', 'search', 'url', 'email', 'tel'].includes((el.type || '').toLowerCase());
-            if (sensitive || !textType) return { blockText: '', start: 0, end: 0, title, url };
-            return { blockText: el.value, start, end, title, url };
-          }
-        }
-        const sel = window.getSelection();
-        const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
-        if (!range || range.collapsed) return { blockText: '', start: 0, end: 0, title, url };
-
-        let node = range.commonAncestorContainer;
-        if (node.nodeType !== Node.ELEMENT_NODE) node = node.parentElement;
-        const block = (node && node.closest('p,li,td,th,blockquote,pre,dd,article,section,div'))
-          || document.body;
-        const pre = document.createRange();
-        pre.selectNodeContents(block);
-        pre.setEnd(range.startContainer, range.startOffset);
-        const start = pre.toString().length;
-        const end = start + range.toString().length;
-        return { blockText: block.textContent || '', start, end, title, url };
-      }
-    });
-    const r = results?.[0]?.result;
-    if (!r) return fallback;
-    return {
-      context: r.blockText ? windowAround(r.blockText, r.start, r.end) : '',
-      pageTitle: r.title || fallback.pageTitle,
-      pageUrl: r.url || fallback.pageUrl
-    };
-  } catch {
-    return fallback;
-  }
+  const r = await runSelectionProbe(tab.id, { withContext: true });
+  if (!r) return fallback;
+  return {
+    context: r.blockText ? windowAround(r.blockText, r.start, r.end) : '',
+    pageTitle: r.title || fallback.pageTitle,
+    pageUrl: r.url || fallback.pageUrl
+  };
 }
 
 async function ensureContentScript(tabId) {
