@@ -7,6 +7,7 @@ import {
   resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError, nextChunk
 } from './lib/chat.js';
 import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
+import { probeSelection, SELECTION_RULES } from './lib/page-probe.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
 const FLOATING_MENU_ID = 'contexthelper-floating-toggle';
@@ -20,6 +21,7 @@ const _abortControllersByTab = new Map();
 
 const CHUNK_THROTTLE_MS = 100;
 const KEEPALIVE_INTERVAL_MS = 20_000;
+const SENSITIVE_FIELD_MESSAGE = 'ContextHelper does not send password or payment fields';
 
 // Must register listeners synchronously — survives service worker restarts
 chrome.contextMenus.onClicked.addListener(handleMenuClick);
@@ -205,7 +207,9 @@ async function handleMenuClick(info, tab) {
 
   if (info.menuItemId === ASK_MENU_ID) {
     if (!info.selectionText?.trim()) return;
-    await showAskPrompt(tab, info.selectionText, await getSettings());
+    const settings = await getSettings();
+    if (await blockSensitiveMenuSelection(info, tab, settings)) return;
+    await showAskPrompt(tab, info.selectionText, settings);
     return;
   }
 
@@ -214,8 +218,21 @@ async function handleMenuClick(info, tab) {
   if (!action) return;
 
   if (!info.selectionText?.trim()) return;
+  if (await blockSensitiveMenuSelection(info, tab, settings)) return;
 
   await runAction(action, { selectionText: info.selectionText, editable: info.editable }, tab, settings);
+}
+
+// info.selectionText of an editable selection may come from a password or
+// payment field. Probe the focused field in the frame that was clicked and
+// stop with a notice when it is sensitive — or when the frame can't be
+// probed (fail closed: we can't tell).
+async function blockSensitiveMenuSelection(info, tab, settings) {
+  if (!info.editable) return false;
+  const probe = await runSelectionProbe(tab.id, { frameId: info.frameId ?? 0 });
+  if (probe && !probe.sensitive) return false;
+  await showTabNotice(tab.id, SENSITIVE_FIELD_MESSAGE, settings);
+  return true;
 }
 
 function floatingOriginsForHost(host) {
@@ -492,6 +509,11 @@ async function handleCommand(command, tab) {
   const selection = await getSelectionFromTab(tab.id);
   if (!selection) return; // restricted page (chrome://, Web Store, ...)
 
+  // Before the empty check: a sensitive field reports no text
+  if (selection.sensitive) {
+    await showTabNotice(tab.id, SENSITIVE_FIELD_MESSAGE, settings);
+    return;
+  }
   if (!selection.text.trim()) {
     await showTabNotice(tab.id, 'Select some text first', settings);
     return;
@@ -510,6 +532,10 @@ async function handleAskCommand(tab) {
   const selection = await getSelectionFromTab(tab.id);
   if (!selection) return; // restricted page
 
+  if (selection.sensitive) {
+    await showTabNotice(tab.id, SENSITIVE_FIELD_MESSAGE, settings);
+    return;
+  }
   if (!selection.text.trim()) {
     await showTabNotice(tab.id, 'Select some text first', settings);
     return;
@@ -772,105 +798,51 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
   }
 }
 
-async function getSelectionFromTab(tabId) {
+/**
+ * Run probeSelection (lib/page-probe.js) in the tab's top frame, or in
+ * `frameId`. Null when the page or frame can't be scripted (chrome://,
+ * Web Store, a frame without access).
+ * @returns {Promise<{ text, editable, sensitive, blockText, start, end, title, url } | null>}
+ */
+async function runSelectionProbe(tabId, { frameId = null, withContext = false } = {}) {
   try {
     const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        const el = document.activeElement;
-        const isTextControl = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
-        if (isTextControl) {
-          // Never send a password or payment field to the provider (same rule as getPageContext)
-          const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
-          const sensitive = autocomplete.includes('password')
-            || autocomplete.split(/\s+/).some(token => token.startsWith('cc-'));
-          const textType = el.tagName === 'TEXTAREA'
-            || ['text', 'search', 'url', 'email', 'tel'].includes((el.type || '').toLowerCase());
-          if (sensitive || !textType) return { text: '', editable: false };
-          let start = null;
-          let end = null;
-          try {
-            start = el.selectionStart;
-            end = el.selectionEnd;
-          } catch { /* no text selection */ }
-          if (start != null && end != null && end > start) {
-            return {
-              text: el.value.slice(start, end),
-              editable: !el.readOnly && !el.disabled
-            };
-          }
-        }
-        const text = window.getSelection()?.toString() || '';
-        return { text, editable: !!(el && el.isContentEditable) };
-      }
+      target: frameId === null ? { tabId } : { tabId, frameIds: [frameId] },
+      func: probeSelection,
+      args: [SELECTION_RULES, withContext]
     });
     return results?.[0]?.result ?? null;
   } catch {
-    // Restricted page (chrome://, about:, etc.)
     return null;
   }
 }
 
 /**
+ * The selection for the keyboard paths: `{ text, editable, sensitive }`, or
+ * null on a restricted page. `sensitive` = a password or payment field has
+ * focus (its text is never read).
+ */
+async function getSelectionFromTab(tabId) {
+  const probe = await runSelectionProbe(tabId);
+  if (!probe) return null;
+  return { text: probe.text || '', editable: !!probe.editable, sensitive: !!probe.sensitive };
+}
+
+/**
  * Page context for {{context}} / {{pageTitle}} / {{pageUrl}}: the selection's
  * surrounding block (windowed around the selection), plus title and URL.
- * Restricted pages or a throw fall back to '' context and the tab's title/url.
+ * Restricted pages fall back to '' context and the tab's title/url; a
+ * sensitive field gives '' context.
  */
 async function getPageContext(tab) {
   const fallback = { context: '', pageTitle: tab.title || '', pageUrl: tab.url || '' };
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        const title = document.title;
-        const url = location.href;
-        const el = document.activeElement;
-        const isTextControl = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
-        if (isTextControl) {
-          let start = null;
-          let end = null;
-          try {
-            // Throws on input types without a text selection (e.g. number)
-            start = el.selectionStart;
-            end = el.selectionEnd;
-          } catch { /* no text selection */ }
-          if (start != null && end != null && end > start) {
-            // Never send the whole value of a password or payment field
-            const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
-            const sensitive = autocomplete.includes('password')
-              || autocomplete.split(/\s+/).some(token => token.startsWith('cc-'));
-            const textType = el.tagName === 'TEXTAREA'
-              || ['text', 'search', 'url', 'email', 'tel'].includes((el.type || '').toLowerCase());
-            if (sensitive || !textType) return { blockText: '', start: 0, end: 0, title, url };
-            return { blockText: el.value, start, end, title, url };
-          }
-        }
-        const sel = window.getSelection();
-        const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
-        if (!range || range.collapsed) return { blockText: '', start: 0, end: 0, title, url };
-
-        let node = range.commonAncestorContainer;
-        if (node.nodeType !== Node.ELEMENT_NODE) node = node.parentElement;
-        const block = (node && node.closest('p,li,td,th,blockquote,pre,dd,article,section,div'))
-          || document.body;
-        const pre = document.createRange();
-        pre.selectNodeContents(block);
-        pre.setEnd(range.startContainer, range.startOffset);
-        const start = pre.toString().length;
-        const end = start + range.toString().length;
-        return { blockText: block.textContent || '', start, end, title, url };
-      }
-    });
-    const r = results?.[0]?.result;
-    if (!r) return fallback;
-    return {
-      context: r.blockText ? windowAround(r.blockText, r.start, r.end) : '',
-      pageTitle: r.title || fallback.pageTitle,
-      pageUrl: r.url || fallback.pageUrl
-    };
-  } catch {
-    return fallback;
-  }
+  const r = await runSelectionProbe(tab.id, { withContext: true });
+  if (!r) return fallback;
+  return {
+    context: r.blockText ? windowAround(r.blockText, r.start, r.end) : '',
+    pageTitle: r.title || fallback.pageTitle,
+    pageUrl: r.url || fallback.pageUrl
+  };
 }
 
 async function ensureContentScript(tabId) {
