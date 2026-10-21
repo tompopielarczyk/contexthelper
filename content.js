@@ -14,6 +14,11 @@
   let pendingClientId = null; // clientId of the spinner shown ahead of START
   const dismissedClientIds = new Set(); // dismissed before START arrived
   const MAX_DISMISSED_CLIENT_IDS = 20;
+  // AI_CHUNK carries only new text at an offset: chars of the active run's
+  // answer already shown, and whether a gap made the stream unusable (the
+  // run then waits for AI_RESULT, which carries the full text)
+  let streamShownLength = 0;
+  let streamDesynced = false;
 
   function isTextControl(el) {
     if (!el) return false;
@@ -82,13 +87,23 @@
         }
         pendingClientId = null;
         if (message.requestId !== undefined) activeRequestId = message.requestId;
+        streamShownLength = 0;
+        streamDesynced = false;
         activeSelectionSnapshot = captureInsertionSnapshot();
         hideFloatingButton();
         showLoading(ts);
         break;
       case 'AI_CHUNK':
         if (activeRequestId === null || message.requestId !== activeRequestId) return;
-        showStreamingTooltip(message.text, ts);
+        if (streamDesynced || typeof message.delta !== 'string' || !message.delta) return;
+        if (message.offset !== streamShownLength) {
+          // A lost or reordered chunk (never expected: the background sends
+          // in order) — stop appending and let AI_RESULT show the full text
+          streamDesynced = true;
+          return;
+        }
+        streamShownLength += message.delta.length;
+        showStreamingTooltip(message.delta, ts);
         break;
       case 'AI_RESULT': {
         if (activeRequestId === null || message.requestId !== activeRequestId) return;
@@ -365,9 +380,10 @@
     return { width, height: storedHeight || 200 };
   }
 
-  // Live view of a streaming answer: created on the first chunk, then only
-  // its text changes. Plain text (markdown renders once the result arrives).
-  function showStreamingTooltip(text, ts) {
+  // Live view of a streaming answer: created on the first chunk, then each
+  // chunk's delta is appended. Plain text (markdown renders once the result
+  // arrives).
+  function showStreamingTooltip(delta, ts) {
     ensureShadowHost();
     let el = shadowRoot.querySelector('.cmn-streaming');
     if (!el) {
@@ -404,22 +420,15 @@
     const content = el.querySelector('.cmn-stream-content');
     // Follow the text only when the reader is already at the bottom
     const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight <= 24;
-    renderStreamDelta(el.querySelector('.cmn-stream-text'), text);
+    renderStreamDelta(el.querySelector('.cmn-stream-text'), delta);
     if (atBottom) content.scrollTop = content.scrollHeight;
     clampOverlay(el); // the tooltip grows while text arrives
   }
 
-  // Chunks carry the accumulated text: append only the new part, fading it
-  // in. A finished fade turns its span back into plain text, so a long
-  // stream doesn't leave thousands of spans behind. Anything that isn't a
-  // pure append (never expected) re-renders the whole text.
-  function renderStreamDelta(textEl, text) {
-    const shown = textEl.textContent;
-    if (!text.startsWith(shown)) {
-      textEl.textContent = text;
-      return;
-    }
-    const delta = text.slice(shown.length);
+  // Append a chunk's new text, fading it in. A finished fade turns its span
+  // back into plain text, so a long stream doesn't leave thousands of spans
+  // behind.
+  function renderStreamDelta(textEl, delta) {
     if (!delta) return;
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
       textEl.appendChild(document.createTextNode(delta));

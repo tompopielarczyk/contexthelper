@@ -4,7 +4,7 @@ import { sendWebhook, renderTemplate } from './lib/webhook.js';
 import {
   shouldStream, createThrottle, isRetryableError,
   ASK_ACTION_ID, pickLLMConfig, sanitizeConversation, buildRefineMessages,
-  resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError
+  resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError, nextChunk
 } from './lib/chat.js';
 import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
 
@@ -658,13 +658,19 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
   let partialText = '';
   let throttle = null;
   let keepalive = null;
+  let sentLength = 0; // chars of the streamed answer already sent as AI_CHUNK
+
+  // Every message of this run goes through one promise chain, so the tab
+  // receives them in issue order: no chunk can overtake AI_RESULT/AI_ERROR
+  let sendChain = Promise.resolve();
+  const send = (message) => (sendChain = sendChain.then(() => sendToTab(tab.id, message)));
 
   try {
     const contentReady = await ensureContentScript(tab.id);
     if (!contentReady || signal.aborted) return;
 
     // Notify content script: show loading indicator before spending tokens.
-    canReportToTab = await sendToTab(tab.id, {
+    canReportToTab = await send({
       type: 'AI_PROCESSING_START',
       requestId,
       clientId,
@@ -679,8 +685,13 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     const isDeepL = config.provider === 'deepl';
     const streaming = shouldStream({ provider: config.provider, displayMode, editable });
     if (streaming) {
+      // Chunks carry only the new text and its offset (the page appends);
+      // resending the accumulated text would make the traffic quadratic
       throttle = createThrottle(text => {
-        sendToTab(tab.id, { type: 'AI_CHUNK', requestId, text, tooltipSettings });
+        const chunk = nextChunk(sentLength, text);
+        if (!chunk) return;
+        sentLength += chunk.delta.length;
+        send({ type: 'AI_CHUNK', requestId, offset: chunk.offset, delta: chunk.delta, tooltipSettings });
       }, CHUNK_THROTTLE_MS);
     }
 
@@ -716,7 +727,8 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
 
     const conversationBase = messages?.length ? messages : [{ role: 'user', content: prompt }];
 
-    await sendToTab(tab.id, {
+    // Queued behind any chunk still in flight (see send)
+    await send({
       type: 'AI_RESULT',
       requestId,
       text: result,
@@ -744,7 +756,7 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     throttle?.cancel();
     if (signal.aborted) return;
     if (!canReportToTab) return;
-    await sendToTab(tab.id, {
+    await send({
       type: 'AI_ERROR',
       requestId,
       message: err?.message || 'An unknown error occurred',
