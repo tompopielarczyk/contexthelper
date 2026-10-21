@@ -3,7 +3,7 @@ import { callAI } from './lib/api-client.js';
 import { sendWebhook, renderTemplate } from './lib/webhook.js';
 import {
   shouldStream, createThrottle, isRetryableError,
-  ASK_ACTION_ID, pickLLMConfig, sanitizeConversation, buildRefineMessages,
+  ASK_ACTION_ID, pickLLMConfig, resolveActionConfig, sanitizeConversation, buildRefineMessages,
   resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError, nextChunk
 } from './lib/chat.js';
 import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
@@ -22,6 +22,8 @@ const _abortControllersByTab = new Map();
 const CHUNK_THROTTLE_MS = 100;
 const KEEPALIVE_INTERVAL_MS = 20_000;
 const SENSITIVE_FIELD_MESSAGE = 'ContextHelper does not send password or payment fields';
+const ACTION_MODEL_REMOVED_MESSAGE = "This action's model was removed — pick another in settings";
+const NO_MODEL_MESSAGE = 'No model configured. Please add a model in the extension settings.';
 
 // Must register listeners synchronously — survives service worker restarts
 chrome.contextMenus.onClicked.addListener(handleMenuClick);
@@ -170,14 +172,6 @@ function resolveActionByMenuId(actions, menuItemId) {
   return actions.find((action, index) => (action.id || `legacy-action-${index}`) === match[1]) || null;
 }
 
-function resolveModelConfig(configs, configId) {
-  if (!configs?.length) return null;
-  if (configId) {
-    return configs.find(c => c.id === configId) || null;
-  }
-  return configs[0];
-}
-
 // Manual delivery triggered by the send button in the result tooltip.
 async function handleSendWebhook({ webhookId, webhookData }) {
   try {
@@ -315,16 +309,22 @@ async function handleRunAction({ actionId, selectionText, editable }, sender) {
   await runAction(action, { selectionText, editable }, tab, settings);
 }
 
+// Abort the run that owns the tab, if any. A run's own `finally` only
+// clears the map entry while it still holds its controller (identity check),
+// so a newer run's entry is never removed by an older run.
+function abortTabRun(tabId) {
+  const running = _abortControllersByTab.get(tabId);
+  if (!running) return;
+  running.controller.abort();
+  _abortControllersByTab.delete(tabId);
+}
+
 // Error tooltip outside the AI flow — content.js gates AI_ERROR on the
 // requestId set by AI_PROCESSING_START, so the notice needs the full pair.
 async function showTabNotice(tabId, message, settings, clientId = null) {
   // The notice replaces whatever the tab shows — stop a run still in flight
   // there, or it keeps spending tokens for a result nobody will see
-  const running = _abortControllersByTab.get(tabId);
-  if (running) {
-    running.controller.abort();
-    _abortControllersByTab.delete(tabId);
-  }
+  abortTabRun(tabId);
   if (!await ensureContentScript(tabId)) return;
   const requestId = crypto.randomUUID();
   const ok = await sendToTab(tabId, {
@@ -424,8 +424,11 @@ async function handleRefine({ actionId, conversation, preset, instruction, sourc
     if (!isAsk && !action) throw new Error('Action no longer exists');
     const config = isAsk
       ? pickLLMConfig(settings.modelConfigs)
-      : pickLLMConfig(settings.modelConfigs, action.modelConfigId);
-    if (!config) throw new Error('No LLM model configured');
+      : resolveActionConfig(settings.modelConfigs, action);
+    if (!config) {
+      if (isAsk) throw new Error('No LLM model configured');
+      throw new Error(action.modelConfigId ? ACTION_MODEL_REMOVED_MESSAGE : NO_MODEL_MESSAGE);
+    }
     if (config.provider === 'deepl') throw new Error('Refine is not available for DeepL');
     const keyError = missingApiKeyError(config);
     if (keyError) throw new Error(keyError);
@@ -555,11 +558,7 @@ async function showAskPrompt(tab, selectionText, settings) {
   // A run still starting up (before its AI_PROCESSING_START) is unknown to
   // the content script's cancel — abort it here, or its START would replace
   // the input. runChat re-checks signal.aborted after every await.
-  const running = _abortControllersByTab.get(tab.id);
-  if (running) {
-    running.controller.abort();
-    _abortControllersByTab.delete(tab.id);
-  }
+  abortTabRun(tab.id);
   if (!await ensureContentScript(tab.id)) return;
   await sendToTab(tab.id, {
     type: 'ASK_PROMPT',
@@ -618,9 +617,9 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
   // context captured with the original selection instead of re-reading the page
   const retrySpec = { kind: 'action', actionId: action.id, selectionText, editable: !!editable };
   return runChat(tab, settings, async () => {
-    const config = resolveModelConfig(settings.modelConfigs, action.modelConfigId);
+    const config = resolveActionConfig(settings.modelConfigs, action);
     if (!config) {
-      throw new Error('No model configured. Please add a model in the extension settings.');
+      throw new Error(action.modelConfigId ? ACTION_MODEL_REMOVED_MESSAGE : NO_MODEL_MESSAGE);
     }
     // Custom endpoints (Ollama, LM Studio) may run without a key
     const keyError = missingApiKeyError(config);
@@ -668,8 +667,7 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
  *   run it dismissed before the START arrived
  */
 async function runChat(tab, settings, buildRequest, retrySpec = null, clientId = null) {
-  const previous = _abortControllersByTab.get(tab.id);
-  if (previous) previous.controller.abort();
+  abortTabRun(tab.id); // one run per tab
 
   // UUIDs, not a counter: the content script outlives a worker restart and
   // must never match a stale id from the previous worker

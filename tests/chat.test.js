@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   shouldStream, pickLLMConfig, ASK_ACTION_ID, createThrottle, isRetryableError, buildAskPrompt,
   buildRefineMessages, sanitizeConversation, REFINE_PRESETS, MAX_CONVERSATION_MESSAGES,
-  resolveRefineInstruction, sanitizeClientId, missingApiKeyError, nextChunk
+  resolveRefineInstruction, sanitizeClientId, missingApiKeyError, nextChunk, resolveActionConfig
 } from '../lib/chat.js';
 
 test('shouldStream truth table', () => {
@@ -207,4 +207,24 @@ test('nextChunk deltas reassemble the full text', () => {
     sent = chunk.offset + chunk.delta.length;
   }
   assert.equal(shown, 'ABCDE\nF');
+});
+
+test('resolveActionConfig: the action\'s config by id, first config for an empty id', () => {
+  const configs = [{ id: 'd', provider: 'deepl' }, { id: 'a', provider: 'anthropic' }];
+  assert.equal(resolveActionConfig(configs, { modelConfigId: 'a' }), configs[1]);
+  assert.equal(resolveActionConfig(configs, { modelConfigId: 'd' }), configs[0]);
+  // Empty id: the first config, DeepL included (an action may translate)
+  assert.equal(resolveActionConfig(configs, { modelConfigId: '' }), configs[0]);
+  assert.equal(resolveActionConfig(configs, {}), configs[0]);
+});
+
+test('resolveActionConfig: a set id whose config is gone gives null (no silent fallback)', () => {
+  const configs = [{ id: 'a', provider: 'anthropic' }];
+  assert.equal(resolveActionConfig(configs, { modelConfigId: 'removed' }), null);
+});
+
+test('resolveActionConfig: no configs gives null', () => {
+  assert.equal(resolveActionConfig([], { modelConfigId: '' }), null);
+  assert.equal(resolveActionConfig(undefined, { modelConfigId: 'a' }), null);
+  assert.equal(resolveActionConfig([{ id: 'a' }], null), null);
 });
