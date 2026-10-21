@@ -7,7 +7,7 @@
   let shadowRoot = null;
   let lastSelectionRect = null;
   let activeCleanups = [];
-  let activeRequestId = 0;
+  let activeRequestId = null; // id of the run whose UI is showing; null = none
   let activeSelectionSnapshot = null;
 
   function isTextControl(el) {
@@ -66,30 +66,51 @@
         hideFloatingButton();
         showLoading(ts);
         break;
+      case 'AI_CHUNK':
+        if (activeRequestId === null || message.requestId !== activeRequestId) return;
+        showStreamingTooltip(message.text, ts);
+        break;
       case 'AI_RESULT': {
-        if (message.requestId !== activeRequestId) return;
+        if (activeRequestId === null || message.requestId !== activeRequestId) return;
+        activeRequestId = null; // run finished — later messages for it are stale
+        // Read before hideOverlay() removes the streaming tooltip, so the
+        // result opens where the stream was
+        const position = getStreamingPosition();
         hideOverlay();
         const mode = message.displayMode || 'auto';
-        const sendContext = message.webhooks?.length && message.webhookData
-          ? { webhooks: message.webhooks, webhookData: message.webhookData }
-          : null;
+        const opts = {
+          sendContext: message.webhooks?.length && message.webhookData
+            ? { webhooks: message.webhooks, webhookData: message.webhookData }
+            : null,
+          position,
+          refine: message.conversation
+            ? { actionId: message.actionId, conversation: message.conversation, sourceText: message.sourceText }
+            : null
+        };
         if (mode === 'tooltip') {
-          showResultTooltip(message.text, ts, sendContext);
+          showResultTooltip(message.text, ts, opts);
         } else if (mode === 'insert') {
           const replaced = replaceSelectedText(message.text, activeSelectionSnapshot) || forceReplaceInDOM(message.text, activeSelectionSnapshot);
-          if (!replaced) showResultTooltip(message.text, ts, sendContext);
+          if (!replaced) showResultTooltip(message.text, ts, opts);
         } else {
           const replaced = message.editable ? replaceSelectedText(message.text, activeSelectionSnapshot) : false;
-          if (!replaced) showResultTooltip(message.text, ts, sendContext);
+          if (!replaced) showResultTooltip(message.text, ts, opts);
         }
         activeSelectionSnapshot = null;
         break;
       }
-      case 'AI_ERROR':
-        if (message.requestId !== activeRequestId) return;
+      case 'AI_ERROR': {
+        if (activeRequestId === null || message.requestId !== activeRequestId) return;
+        activeRequestId = null;
+        const position = getStreamingPosition();
         hideOverlay();
-        showErrorTooltip(message.message, ts);
+        showErrorTooltip(message.message, ts, {
+          retry: message.retry || null,
+          partialText: message.partialText || '',
+          position
+        });
         break;
+      }
     }
   });
 
@@ -175,13 +196,16 @@
   }
 
   function appendAndClampOverlay(el, pos) {
-    const margin = 8;
-    const viewport = getViewport();
     el.style.top = `${pos.top}px`;
     el.style.left = `${pos.left}px`;
     shadowRoot.appendChild(el);
+    clampOverlay(el);
+  }
 
-    // Use real rendered size instead of rough estimate to keep overlay on screen.
+  // Use real rendered size instead of rough estimate to keep overlay on screen.
+  function clampOverlay(el) {
+    const margin = 8;
+    const viewport = getViewport();
     const rect = el.getBoundingClientRect();
     const minTop = viewport.top + margin;
     const minLeft = viewport.left + margin;
@@ -228,9 +252,120 @@
     const label = document.createElement('span');
     label.textContent = 'Processing...';
 
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cmn-btn cmn-btn-close cmn-loading-close';
+    closeBtn.textContent = '\u2715';
+    closeBtn.title = 'Cancel';
+    closeBtn.addEventListener('click', cancelActiveRun);
+
     el.appendChild(spinner);
     el.appendChild(label);
+    el.appendChild(closeBtn);
     appendAndClampOverlay(el, pos);
+
+    // Esc, ✕ or a click outside cancels the run
+    addEscHandler(cancelActiveRun);
+    addOutsideClickHandler(cancelActiveRun);
+  }
+
+  function addEscHandler(onEscape) {
+    const escHandler = (e) => {
+      if (e.key === 'Escape') onEscape();
+    };
+    document.addEventListener('keydown', escHandler);
+    activeCleanups.push(() => document.removeEventListener('keydown', escHandler));
+  }
+
+  // Outside-click dismissal, armed after a short delay so the click that
+  // started the run cannot close the overlay right away
+  function addOutsideClickHandler(onOutside) {
+    const ignoreOutsideClickUntil = performance.now() + 400;
+    const clickHandler = (e) => {
+      if (performance.now() < ignoreOutsideClickUntil) return;
+      if (!overlayHost.contains(e.target)) onOutside();
+    };
+    const clickTimer = setTimeout(() => {
+      document.addEventListener('mousedown', clickHandler);
+      activeCleanups.push(() => document.removeEventListener('mousedown', clickHandler));
+    }, 100);
+    activeCleanups.push(() => clearTimeout(clickTimer));
+  }
+
+  // Dismissal of the spinner or the streaming tooltip: tell the background to
+  // abort the run, then forget it so its late chunks/result are dropped.
+  function cancelActiveRun() {
+    const requestId = activeRequestId;
+    if (requestId !== null) {
+      try {
+        chrome.runtime.sendMessage({ type: 'CANCEL_ACTION', requestId }).catch(() => {});
+      } catch { /* extension reloaded mid-session */ }
+    }
+    activeRequestId = null;
+    activeSelectionSnapshot = null;
+    hideOverlay();
+  }
+
+  function getStreamingPosition() {
+    const el = shadowRoot?.querySelector('.cmn-streaming');
+    if (!el) return null;
+    const top = Number.parseFloat(el.style.top);
+    const left = Number.parseFloat(el.style.left);
+    return Number.isFinite(top) && Number.isFinite(left) ? { top, left } : null;
+  }
+
+  // Shared starting size of the streaming and result tooltips, so the result
+  // replaces the stream without jumping
+  function tooltipBox(el, ts) {
+    const storedWidth = tooltipDimension(ts?.width);
+    const storedHeight = tooltipDimension(ts?.height);
+    const width = storedWidth || 420;
+    el.style.width = `${width}px`;
+    el.style.maxHeight = storedHeight ? `${storedHeight}px` : '400px';
+    return { width, height: storedHeight || 200 };
+  }
+
+  // Live view of a streaming answer: created on the first chunk, then only
+  // its text changes. Plain text (markdown renders once the result arrives).
+  function showStreamingTooltip(text, ts) {
+    ensureShadowHost();
+    let el = shadowRoot.querySelector('.cmn-streaming');
+    if (!el) {
+      hideOverlay(); // spinner + its Esc handler
+
+      el = document.createElement('div');
+      el.className = 'cmn-overlay cmn-tooltip cmn-streaming';
+      const size = tooltipBox(el, ts);
+      applyTooltipStyles(el, ts);
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'cmn-btn cmn-btn-close';
+      closeBtn.textContent = '\u2715';
+      closeBtn.title = 'Stop';
+      closeBtn.addEventListener('click', cancelActiveRun);
+
+      const content = document.createElement('div');
+      content.className = 'cmn-content cmn-stream-content';
+      const textEl = document.createElement('span');
+      textEl.className = 'cmn-stream-text';
+      const caret = document.createElement('span');
+      caret.className = 'cmn-caret';
+      content.appendChild(textEl);
+      content.appendChild(caret);
+
+      el.appendChild(closeBtn);
+      el.appendChild(content);
+      appendAndClampOverlay(el, getPosition(ts?.position, size));
+
+      addEscHandler(cancelActiveRun);
+      addOutsideClickHandler(cancelActiveRun);
+    }
+
+    const content = el.querySelector('.cmn-stream-content');
+    // Follow the text only when the reader is already at the bottom
+    const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight <= 24;
+    el.querySelector('.cmn-stream-text').textContent = text;
+    if (atBottom) content.scrollTop = content.scrollHeight;
+    clampOverlay(el); // the tooltip grows while text arrives
   }
 
   function tooltipDimension(value) {
@@ -238,22 +373,26 @@
     return Number.isFinite(n) && n > 0 ? n : null;
   }
 
-  function showResultTooltip(text, ts, sendContext) {
+  /**
+   * @param {string} text
+   * @param {object} ts  tooltipSettings
+   * @param {{ sendContext?: object | null, position?: { top: number, left: number } | null,
+   *   refine?: { actionId: string, conversation: Array, sourceText: string } | null }} [opts]
+   *   `position` pins the tooltip (e.g. where the stream was); `refine` is
+   *   carried for follow-up turns and not rendered yet.
+   */
+  function showResultTooltip(text, ts, opts = {}) {
+    const { sendContext = null, position = null } = opts;
     ensureShadowHost();
     hideOverlay();
 
-    const storedWidth = tooltipDimension(ts?.width);
-    const storedHeight = tooltipDimension(ts?.height);
-    const width = storedWidth || 420;
-
-    const pos = getPosition(ts?.position, { width, height: storedHeight || 200 });
     const el = document.createElement('div');
     el.className = 'cmn-overlay cmn-tooltip cmn-resizable';
     // Starting size; the CSS resize handle overrides via inline width/height.
     // Default max-height keeps short results compact — cleared on first drag
     // so the user can grow past it (CSS caps everything at the viewport).
-    el.style.width = `${width}px`;
-    el.style.maxHeight = storedHeight ? `${storedHeight}px` : '400px';
+    const size = tooltipBox(el, ts);
+    const pos = position || getPosition(ts?.position, size);
     applyTooltipStyles(el, ts);
 
     const closeBtn = document.createElement('button');
@@ -300,31 +439,25 @@
     appendAndClampOverlay(el, pos);
     observeTooltipResize(el);
 
-    // Dismiss on Escape
-    const escHandler = (e) => {
-      if (e.key === 'Escape') hideOverlay();
-    };
-    document.addEventListener('keydown', escHandler);
-    activeCleanups.push(() => document.removeEventListener('keydown', escHandler));
-
-    // Dismiss on click outside (delayed to avoid immediate trigger)
-    const ignoreOutsideClickUntil = performance.now() + 400;
-    const clickHandler = (e) => {
-      if (performance.now() < ignoreOutsideClickUntil) return;
-      if (!overlayHost.contains(e.target)) hideOverlay();
-    };
-    const clickTimer = setTimeout(() => {
-      document.addEventListener('mousedown', clickHandler);
-      activeCleanups.push(() => document.removeEventListener('mousedown', clickHandler));
-    }, 100);
-    activeCleanups.push(() => clearTimeout(clickTimer));
+    addEscHandler(hideOverlay);
+    addOutsideClickHandler(hideOverlay);
   }
 
-  function showErrorTooltip(message, ts) {
+  /**
+   * @param {string} message
+   * @param {object} ts  tooltipSettings
+   * @param {{ retry?: object | null, partialText?: string,
+   *   position?: { top: number, left: number } | null }} [opts]
+   *   `partialText` (text streamed before the failure) is shown above the
+   *   error with a copy button; `retry` adds a Retry button and keeps the
+   *   tooltip open until dismissed.
+   */
+  function showErrorTooltip(message, ts, opts = {}) {
+    const { retry = null, partialText = '', position = null } = opts;
     ensureShadowHost();
     hideOverlay();
 
-    const pos = getPosition(ts?.position);
+    const pos = position || getPosition(ts?.position);
     const el = document.createElement('div');
     el.className = 'cmn-overlay cmn-tooltip cmn-error';
 
@@ -332,24 +465,71 @@
     closeBtn.className = 'cmn-btn cmn-btn-close';
     closeBtn.textContent = '\u2715';
     closeBtn.addEventListener('click', () => hideOverlay());
+    el.appendChild(closeBtn);
+
+    if (partialText) {
+      const partial = document.createElement('div');
+      partial.className = 'cmn-partial';
+      partial.textContent = partialText;
+      el.appendChild(partial);
+    }
 
     const content = document.createElement('div');
     content.className = 'cmn-content';
     content.textContent = message;
-
-    el.appendChild(closeBtn);
     el.appendChild(content);
+
+    if (partialText || retry) {
+      const actions = document.createElement('div');
+      actions.className = 'cmn-actions';
+
+      if (partialText) {
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'cmn-btn cmn-btn-send';
+        copyBtn.textContent = 'Copy partial';
+        copyBtn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(partialText);
+            copyBtn.textContent = 'Copied!';
+          } catch {
+            copyBtn.textContent = 'Error!';
+          }
+          const resetTimer = setTimeout(() => {
+            if (copyBtn.isConnected) copyBtn.textContent = 'Copy partial';
+          }, 1500);
+          activeCleanups.push(() => clearTimeout(resetTimer));
+        });
+        actions.appendChild(copyBtn);
+      }
+
+      if (retry) {
+        const retryBtn = document.createElement('button');
+        retryBtn.className = 'cmn-btn cmn-btn-primary';
+        retryBtn.textContent = '↻ Retry';
+        // Keep page focus and selection, so an insert-mode retry can still
+        // replace the original text
+        retryBtn.addEventListener('mousedown', (e) => e.preventDefault());
+        retryBtn.addEventListener('click', () => {
+          hideOverlay();
+          try {
+            chrome.runtime.sendMessage({ type: 'RETRY_RUN', retry }).catch(() => {});
+          } catch { /* extension reloaded mid-session */ }
+        });
+        actions.appendChild(retryBtn);
+      }
+
+      el.appendChild(actions);
+    }
+
     appendAndClampOverlay(el, pos);
 
-    // Auto-dismiss after 6s
-    const dismissTimer = setTimeout(() => hideOverlay(), 6000);
-    activeCleanups.push(() => clearTimeout(dismissTimer));
+    // Auto-dismiss after 6s — not when a retry is offered
+    if (!retry) {
+      const dismissTimer = setTimeout(() => hideOverlay(), 6000);
+      activeCleanups.push(() => clearTimeout(dismissTimer));
+    }
 
-    const escHandler = (e) => {
-      if (e.key === 'Escape') hideOverlay();
-    };
-    document.addEventListener('keydown', escHandler);
-    activeCleanups.push(() => document.removeEventListener('keydown', escHandler));
+    addEscHandler(hideOverlay);
   }
 
   // Persist the size after the user drags the native resize handle, so the
@@ -1010,6 +1190,54 @@
         white-space: pre-wrap;
       }
 
+      /* Streaming answer: same size limits as the result tooltip it turns
+         into (inline width/max-height from tooltipBox), plain text while it
+         arrives, with a blinking caret */
+      .cmn-streaming {
+        min-height: 120px;
+        max-width: calc(100vw - 16px);
+        max-height: calc(100vh - 16px);
+      }
+
+      /* Two classes: must beat the later .cmn-content white-space: normal */
+      .cmn-content.cmn-stream-content {
+        white-space: pre-wrap;
+        margin-bottom: 0;
+      }
+
+      .cmn-caret {
+        display: inline-block;
+        width: 0.5em;
+        height: 1em;
+        margin-left: 1px;
+        vertical-align: text-bottom;
+        background: currentColor;
+        opacity: 0.6;
+        animation: cmn-blink 1s steps(1) infinite;
+      }
+
+      .cmn-caret[hidden] {
+        display: none;
+      }
+
+      @keyframes cmn-blink {
+        50% { opacity: 0; }
+      }
+
+      /* Text streamed before an error, shown above the error message */
+      .cmn-partial {
+        flex: 0 1 auto;
+        min-height: 0;
+        max-height: 200px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: #6b7280;
+        margin-bottom: 8px;
+        padding: 0 24px 8px 0;
+        border-bottom: 1px solid #fecaca;
+      }
+
       .cmn-content {
         flex: 1 1 auto;
         min-height: 0;
@@ -1121,6 +1349,13 @@
 
       .cmn-btn-close:hover {
         color: #4b5563;
+      }
+
+      /* In the spinner pill the close button sits in the flex row */
+      .cmn-btn-close.cmn-loading-close {
+        position: static;
+        margin-left: 2px;
+        font-size: 13px;
       }
 
       .cmn-send-wrap {
