@@ -5,6 +5,7 @@ import {
   extractAnthropicText, extractChatCompletionText, extractGeminiText,
   createSSEParser, parseStreamEvent, getDefaultModel, callAI
 } from '../lib/api-client.js';
+import { isRetryableError } from '../lib/chat.js';
 
 test('extracts provider text when present', () => {
   assert.equal(extractAnthropicText({ content: [{ text: ' hello\n' }] }), ' hello\n');
@@ -97,11 +98,12 @@ const anthropicDelta = (text) => sse({ type: 'content_block_delta', delta: { typ
 const chatDelta = (content) => sse({ choices: [{ delta: { content }, finish_reason: null }] });
 
 test('anthropic stream resolves full text', async (t) => {
-  stubFetch(t, () => streamResponse([anthropicDelta('He'), anthropicDelta('llo'), sse({ type: 'message_stop' }, 'message_stop')]));
+  const calls = stubFetch(t, () => streamResponse([anthropicDelta('He'), anthropicDelta('llo'), sse({ type: 'message_stop' }, 'message_stop')]));
   const deltas = [];
   const result = await callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: d => deltas.push(d) });
   assert.deepEqual(deltas, ['He', 'Hello']);
   assert.equal(result, 'Hello');
+  assert.equal(calls[0].body.stream, true);
 });
 
 test('split UTF-8 across chunks', async (t) => {
@@ -241,4 +243,95 @@ test('multi-turn messages', async (t) => {
   await callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', messages, systemPrompt: 'sys' });
   assert.equal(anthropicCalls[0].body.messages.length, 3);
   assert.equal(anthropicCalls[0].body.system, 'sys');
+});
+
+test('SSE parser calls onDone once for [DONE]', () => {
+  const got = [];
+  let doneCount = 0;
+  const p = createSSEParser(d => got.push(d), () => doneCount++);
+  p.push('data: {"a":1}\n\ndata: [DONE]\n\n');
+  p.end();
+  assert.deepEqual(got, ['{"a":1}']);
+  assert.equal(doneCount, 1);
+});
+
+test('openai stream ending with [DONE] and no finish_reason resolves', async (t) => {
+  const calls = stubFetch(t, () => streamResponse([chatDelta('local answer'), 'data: [DONE]\n\n']));
+  const result = await callAI({ provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {} });
+  assert.equal(result, 'local answer');
+  assert.equal(calls[0].body.stream, true);
+});
+
+test('openai stream with plain EOF and no [DONE] still rejects', async (t) => {
+  stubFetch(t, () => streamResponse([chatDelta('local answer')]));
+  await assert.rejects(
+    callAI({ provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {} }),
+    /ended unexpectedly/
+  );
+});
+
+test('[DONE] does not end an anthropic stream', async (t) => {
+  stubFetch(t, () => streamResponse([anthropicDelta('Hi'), 'data: [DONE]\n\n']));
+  await assert.rejects(
+    callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {} }),
+    /ended unexpectedly/
+  );
+});
+
+test('network drop mid-stream rejects with a retryable APIError', async (t) => {
+  stubFetch(t, () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(chatDelta('par')));
+        setTimeout(() => controller.error(new TypeError('network')), 5);
+      }
+    });
+    return new Response(body, { status: 200 });
+  });
+  await assert.rejects(
+    callAI({ provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {} }),
+    (err) => err.name === 'APIError' && /Connection lost/.test(err.message) && isRetryableError(err)
+  );
+});
+
+test('streamed Gemini finish with no text keeps the reason', async (t) => {
+  stubFetch(t, () => streamResponse([sse({ candidates: [{ content: { parts: [] }, finishReason: 'SAFETY' }] })]));
+  await assert.rejects(
+    callAI({ provider: 'google', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {} }),
+    /Google Gemini returned an empty response \(SAFETY\)/
+  );
+});
+
+test('single-prompt Gemini body is unchanged', async (t) => {
+  const calls = stubFetch(t, () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'x' }] } }] }), { status: 200 }));
+  await callAI({ provider: 'google', apiKey: 'k', model: 'gm', prompt: 'p', systemPrompt: 's' });
+  assert.match(calls[0].url, /\/gm:generateContent$/);
+  assert.equal(calls[0].options.body, JSON.stringify({
+    contents: [{ parts: [{ text: 'p' }] }],
+    generationConfig: { maxOutputTokens: 4096, temperature: 0.3 },
+    systemInstruction: { parts: [{ text: 's' }] }
+  }));
+
+  // A single user turn passed as messages (what runAction sends) is the same request
+  await callAI({ provider: 'google', apiKey: 'k', model: 'gm', messages: [{ role: 'user', content: 'p' }], systemPrompt: 's' });
+  assert.equal(calls[1].options.body, calls[0].options.body);
+});
+
+test('openrouter request shape', async (t) => {
+  const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), { status: 200 }));
+  await callAI({ provider: 'openrouter', apiKey: 'k', model: 'm', prompt: 'p' });
+  assert.equal(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(calls[0].body.max_tokens, 4096);
+  assert.equal('max_completion_tokens' in calls[0].body, false);
+  assert.equal(calls[0].options.headers['HTTP-Referer'], 'https://github.com/contexthelper');
+  assert.equal(calls[0].options.headers['X-Title'], 'ContextHelper');
+  assert.equal(calls[0].options.headers['Authorization'], 'Bearer k');
+});
+
+test('openai request uses max_completion_tokens', async (t) => {
+  const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), { status: 200 }));
+  await callAI({ provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p' });
+  assert.equal(calls[0].url, 'https://api.openai.com/v1/chat/completions');
+  assert.equal(calls[0].body.max_completion_tokens, 4096);
+  assert.equal('max_tokens' in calls[0].body, false);
 });
