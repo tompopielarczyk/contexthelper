@@ -732,3 +732,27 @@ test('OpenAI gets a 16 000 token budget, OpenRouter keeps max_tokens 4096', asyn
   assert.equal(calls[1].body.max_tokens, 4096);
   assert.equal('max_completion_tokens' in calls[1].body, false);
 });
+
+// ── Default models and fallback lists (Revision 3, item 11) ──
+
+test('getDefaultModel per provider', () => {
+  assert.equal(getDefaultModel('anthropic'), 'claude-sonnet-5-5');
+  assert.equal(getDefaultModel('openai'), 'gpt-6-luna');
+  assert.equal(getDefaultModel('openrouter'), 'openai/gpt-6-luna');
+  assert.equal(getDefaultModel('google'), 'gemini-3.5-flash-lite');
+  assert.equal(getDefaultModel('deepl'), '');
+  assert.equal(getDefaultModel('custom'), '');
+});
+
+test('fallback model lists carry the current models and include each default', () => {
+  const ids = (provider) => getAvailableModels(provider).map(m => m.id);
+  assert.deepEqual(ids('anthropic'), ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5']);
+  assert.deepEqual(ids('openai'), ['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.4-mini']);
+  assert.deepEqual(ids('google'), ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash']);
+  const openrouter = ids('openrouter');
+  assert.deepEqual(openrouter.slice(0, 3), ['anthropic/claude-sonnet-5.5', 'openai/gpt-6-luna', 'google/gemini-3.8-flash']);
+  assert.ok(openrouter.includes('deepseek/deepseek-v3.2') && openrouter.includes('stepfun/step-3.5-flash'));
+  assert.equal(openrouter.length, 11);
+  for (const provider of ['anthropic', 'openai', 'openrouter', 'google'])
+    assert.ok(ids(provider).includes(getDefaultModel(provider)), provider);
+});
