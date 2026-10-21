@@ -37,6 +37,9 @@
     "run-action-4": {
       "suggested_key": { "default": "Ctrl+Shift+4" },
       "description": "Run action assigned to Shortcut 4"
+    },
+    "ask-selection": {
+      "description": "Ask a question about the selected text"
     }
   },
   "background": {

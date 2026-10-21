@@ -4,12 +4,14 @@ import { sendWebhook, renderTemplate } from './lib/webhook.js';
 import {
   shouldStream, createThrottle, isRetryableError,
   ASK_ACTION_ID, pickLLMConfig, sanitizeConversation, buildRefineMessages,
-  resolveRefineInstruction, sanitizeClientId
+  resolveRefineInstruction, sanitizeClientId, buildAskPrompt
 } from './lib/chat.js';
 import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
 const FLOATING_MENU_ID = 'contexthelper-floating-toggle';
+const ASK_MENU_ID = 'contexthelper-ask';
+const ASK_COMMAND = 'ask-selection';
 const FLOATING_SCRIPT_ID = 'contexthelper-floating';
 
 let _menuRebuildQueue = Promise.resolve();
@@ -38,6 +40,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === 'REFINE_ACTION') {
     handleRefine(message, sender, sanitizeClientId(message.clientId));
+  }
+  if (message?.type === 'RUN_ASK') {
+    handleRunAsk(message, sender);
   }
 });
 
@@ -94,8 +99,8 @@ async function rebuildContextMenuNow() {
 
   // getSettings may write during migration, which fires onSettingsChanged and
   // queues another rebuild — read before creating anything
-  const { actions } = await getSettings();
-  if (!actions?.length) return;
+  // The parent and the Ask item exist even with zero actions
+  const actions = (await getSettings()).actions || [];
 
   const shortcutBySlot = await getShortcutsBySlot();
 
@@ -116,6 +121,13 @@ async function rebuildContextMenuNow() {
       contexts: ['selection']
     });
   }
+
+  await createMenuItem({
+    id: ASK_MENU_ID,
+    parentId: MENU_PARENT_ID,
+    title: 'Ask about selection…',
+    contexts: ['selection']
+  });
 
   await createMenuItem({
     id: `${FLOATING_MENU_ID}-separator`,
@@ -188,6 +200,12 @@ async function handleMenuClick(info, tab) {
 
   if (info.menuItemId === FLOATING_MENU_ID) {
     await handleFloatingToggle(info, tab);
+    return;
+  }
+
+  if (info.menuItemId === ASK_MENU_ID) {
+    if (!info.selectionText?.trim()) return;
+    await showAskPrompt(tab, info.selectionText, await getSettings());
     return;
   }
 
@@ -351,6 +369,10 @@ async function handleRetryRun(retry, sender, clientId = null) {
     case 'refine':
       await handleRefine(retry, sender, clientId);
       return;
+    case 'ask': {
+      await handleRunAsk(retry, sender);
+      return;
+    }
     default:
       await showTabNotice(tab.id, 'This request can no longer be retried', await getSettings(), clientId);
       return;
@@ -448,6 +470,11 @@ async function syncFloatingButtonRegistration() {
 }
 
 async function handleCommand(command, tab) {
+  if (command === ASK_COMMAND) {
+    await handleAskCommand(tab);
+    return;
+  }
+
   const slot = COMMAND_SLOT_RE.exec(command)?.[1];
   if (!slot) return;
 
@@ -470,6 +497,72 @@ async function handleCommand(command, tab) {
   }
 
   await runAction(action, { selectionText: selection.text, editable: selection.editable }, tab, settings);
+}
+
+async function handleAskCommand(tab) {
+  if (!tab?.id) {
+    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  }
+  if (!tab?.id) return;
+
+  const settings = await getSettings();
+  const selection = await getSelectionFromTab(tab.id);
+  if (!selection) return; // restricted page
+
+  if (!selection.text.trim()) {
+    await showTabNotice(tab.id, 'Select some text first', settings);
+    return;
+  }
+
+  await showAskPrompt(tab, selection.text, settings);
+}
+
+const ASK_NEEDS_LLM_MESSAGE = 'Ask needs an LLM model — add one in the extension settings (DeepL cannot answer questions)';
+
+// Open the question input next to the selection (content.js answers with RUN_ASK)
+async function showAskPrompt(tab, selectionText, settings) {
+  if (!pickLLMConfig(settings.modelConfigs)) {
+    await showTabNotice(tab.id, ASK_NEEDS_LLM_MESSAGE, settings);
+    return;
+  }
+  if (!await ensureContentScript(tab.id)) return;
+  await sendToTab(tab.id, {
+    type: 'ASK_PROMPT',
+    selectionText,
+    tooltipSettings: settings.tooltipSettings
+  });
+}
+
+// Question submitted from the Ask input
+async function handleRunAsk({ question, selectionText }, sender) {
+  const tab = sender?.tab;
+  if (!tab?.id) return;
+  if (typeof question !== 'string' || !question.trim()) return;
+  if (typeof selectionText !== 'string' || !selectionText.trim()) return;
+
+  const settings = await getSettings();
+  await runAsk(question, selectionText, tab, settings);
+}
+
+// Free-form question about the selection — always a tooltip answer, first LLM config
+function runAsk(question, selectionText, tab, settings) {
+  return runChat(tab, settings, async () => {
+    const config = pickLLMConfig(settings.modelConfigs);
+    if (!config) throw new Error(ASK_NEEDS_LLM_MESSAGE);
+    if (!config.apiKey) {
+      throw new Error('Missing API key. Please configure the API key in settings.');
+    }
+    const prompt = buildAskPrompt(question, selectionText);
+    return {
+      config,
+      messages: [{ role: 'user', content: prompt }],
+      prompt,
+      systemPrompt: settings.systemPrompt,
+      displayMode: 'tooltip',
+      editable: false,
+      meta: { actionId: ASK_ACTION_ID, actionName: 'Ask', sourceText: selectionText }
+    };
+  }, { kind: 'ask', question, selectionText });
 }
 
 // Shared AI flow for text actions — callers guarantee a non-empty selectionText

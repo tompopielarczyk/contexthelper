@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { shouldStream, pickLLMConfig, ASK_ACTION_ID, createThrottle, isRetryableError } from '../lib/chat.js';
+import { shouldStream, pickLLMConfig, ASK_ACTION_ID, createThrottle, isRetryableError, buildAskPrompt } from '../lib/chat.js';
 
 test('shouldStream truth table', () => {
   assert.equal(shouldStream({ provider: 'deepl', displayMode: 'tooltip', editable: false }), false);
@@ -161,4 +161,8 @@ test('sanitizeClientId', () => {
   assert.equal(sanitizeClientId(''), null);
   assert.equal(sanitizeClientId(42), null);
   assert.equal(sanitizeClientId(undefined), null);
+});
+
+test('buildAskPrompt', () => {
+  assert.equal(buildAskPrompt('  Why? ', 'abc'), 'Why?\n\nSelected text:\n"""\nabc\n"""');
 });
