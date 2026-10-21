@@ -403,9 +403,35 @@
     const content = el.querySelector('.cmn-stream-content');
     // Follow the text only when the reader is already at the bottom
     const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight <= 24;
-    el.querySelector('.cmn-stream-text').textContent = text;
+    renderStreamDelta(el.querySelector('.cmn-stream-text'), text);
     if (atBottom) content.scrollTop = content.scrollHeight;
     clampOverlay(el); // the tooltip grows while text arrives
+  }
+
+  // Chunks carry the accumulated text: append only the new part, fading it
+  // in. A finished fade turns its span back into plain text, so a long
+  // stream doesn't leave thousands of spans behind. Anything that isn't a
+  // pure append (never expected) re-renders the whole text.
+  function renderStreamDelta(textEl, text) {
+    const shown = textEl.textContent;
+    if (!text.startsWith(shown)) {
+      textEl.textContent = text;
+      return;
+    }
+    const delta = text.slice(shown.length);
+    if (!delta) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      textEl.appendChild(document.createTextNode(delta));
+      return;
+    }
+    const span = document.createElement('span');
+    span.className = 'cmn-fade';
+    span.textContent = delta;
+    span.addEventListener('animationend', () => {
+      span.replaceWith(document.createTextNode(span.textContent));
+      textEl.normalize();
+    }, { once: true });
+    textEl.appendChild(span);
   }
 
   function tooltipDimension(value) {
@@ -482,8 +508,30 @@
     appendAndClampOverlay(el, pos);
     observeTooltipResize(el);
 
+    // An open drop-up closes on any click outside it: inside the tooltip
+    // (text, input, padding) and on the page — where the first click only
+    // closes the menu, not the whole tooltip
+    el.addEventListener('mousedown', (e) => {
+      if (!e.composedPath().some(node => node.classList?.contains('cmn-send-wrap'))) {
+        closeActionMenus(el);
+      }
+    });
     addEscHandler(hideOverlay);
-    addOutsideClickHandler(hideOverlay);
+    addOutsideClickHandler(() => {
+      if (!closeActionMenus(el)) hideOverlay();
+    });
+  }
+
+  // Hides every open drop-up in the tooltip; true when one was open
+  function closeActionMenus(root) {
+    let closed = false;
+    for (const menu of root.querySelectorAll('.cmn-send-menu')) {
+      if (!menu.hidden) {
+        menu.hidden = true;
+        closed = true;
+      }
+    }
+    return closed;
   }
 
   // Ask the background for a run the page itself started (refine, retry):
@@ -1422,6 +1470,16 @@
 
       @keyframes cmn-blink {
         50% { opacity: 0; }
+      }
+
+      /* Each streamed chunk fades in (renderStreamDelta) */
+      .cmn-fade {
+        animation: cmn-fade-in 300ms ease-out both;
+      }
+
+      @keyframes cmn-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
       }
 
       /* Text streamed before an error, shown above the error message */
