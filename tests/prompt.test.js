@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ACTION_PLACEHOLDERS, renderActionPrompt, templateUsesPageContext, windowAround } from '../lib/prompt.js';
+import { ACTION_PLACEHOLDERS, renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from '../lib/prompt.js';
 
 test('ACTION_PLACEHOLDERS lists the action placeholders', () => {
   assert.deepEqual(ACTION_PLACEHOLDERS, ['text', 'context', 'pageTitle', 'pageUrl']);
@@ -41,4 +41,15 @@ test('windowAround near the end keeps selection and only marks the cut side', ()
   assert.ok(out.endsWith('END'));
   assert.ok(out.startsWith('…'));
   assert.ok(out.length <= 101);
+});
+
+test('sanitizePageVars accepts an object of strings, rejects anything else', () => {
+  const ok = { context: 'c', pageTitle: 'T', pageUrl: 'https://u' };
+  assert.deepEqual(sanitizePageVars(ok), ok);
+  assert.deepEqual(sanitizePageVars({ ...ok, text: 'smuggled', extra: 1 }), ok);
+  assert.equal(sanitizePageVars(null), null);
+  assert.equal(sanitizePageVars('x'), null);
+  assert.equal(sanitizePageVars([]), null);
+  assert.equal(sanitizePageVars({ context: 'c', pageTitle: 5, pageUrl: 'u' }), null);
+  assert.equal(sanitizePageVars({ context: 'c', pageTitle: 'T' }), null);
 });
