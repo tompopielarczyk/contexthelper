@@ -10,30 +10,35 @@
 - a custom OpenAI-compatible provider (Ollama, LM Studio, vLLM).
 
 **Architecture:**
-- `lib/api-client.js` gains:
-  - multi-turn `messages`;
-  - an `onDelta` streaming callback;
-  - a `custom` provider with a user-supplied `baseUrl`.
+- `lib/api-client.js` gains multi-turn `messages`, an `onDelta` streaming callback and a shared chat-completions caller. Task 2 adds the `custom` provider on top.
 - `background.js` routes every AI run through one runner, `runChat`. The runner owns:
-  - the request id;
+  - a session-unique request id;
   - aborting the previous run;
-  - streaming `AI_CHUNK` messages;
-  - the final `AI_RESULT`, which now carries the conversation.
+  - the service-worker keepalive;
+  - throttled `AI_CHUNK` messages;
+  - the final `AI_RESULT`, which carries the conversation.
 - Refine and Ask are thin message handlers on top of `runChat`.
-- New pure modules hold the logic that unit tests cover:
-  - `lib/chat.js`: run, refine and ask helpers;
-  - `lib/prompt.js`: template rendering and page context.
+- Pure logic lives in two new modules covered by unit tests: `lib/chat.js` and `lib/prompt.js`.
 
-**Tech stack:** Chrome MV3, vanilla JS (ES modules in background/options, IIFE content script), `node --test`, no dependencies.
+**Tech stack:** Chrome MV3, vanilla JS (ES modules in background/options, IIFE content script), `node --test` (Node ≥ 20), no dependencies.
 
-**Spec:** this plan is the spec. The product decisions behind it are in the conversation summary below.
+**Spec:** this plan is the spec.
 
-**Decisions:**
-- Stream only when the result goes to a tooltip.
-- Insert mode stays atomic and keeps the spinner.
-- Refine is tooltip-only.
+**Product decisions:**
+- Stream only when the result goes to a tooltip. Insert mode stays atomic and keeps the spinner.
+- Refine is tooltip-only and never available for DeepL.
 - Ask uses the first non-DeepL model config.
 - `custom` allows plain `http` only for loopback and private-network hosts.
+
+**Revision 2** folds in the Codex plan review:
+- streaming is a foundation wave of its own;
+- the tooltip options object;
+- stream terminal and error semantics;
+- the worker keepalive;
+- body-stream abort ownership;
+- custom-provider guards and permission protection;
+- focus and Esc handling;
+- the conversation contract.
 
 ## Execution layout (orchestrator)
 
@@ -41,183 +46,185 @@
 
 **Waves:**
 
-| Wave | Tasks (in parallel) | Merge order into `release/1.1.0` |
+| Wave | Tasks | Merge order into `release/1.1.0` |
 |---|---|---|
-| A | Task 1 (Custom provider), Task 2 (Streaming + runner) | 1 then 2 (Task 2 rebases on 1) |
-| B | Task 3 (Page context), Task 4 (Refine), Task 5 (Ask) | 3, 4, 5 (each rebases on the previous) |
-| C | Task 6 (docs, privacy, version), done by the orchestrator | n/a |
+| A | Task 1 (Streaming + runner + shared chat caller), alone. It is the foundation every other task builds on. | 1 |
+| B | Task 2 (Custom provider), Task 3 (Page context), Task 4 (Refine), Task 5 (Ask), in parallel from the post-A tip | 2, 3, 4, 5. Each implementer rebases onto the new tip, re-runs `npm test` and reports semantic conflicts. |
+| C | Task 6 (docs, privacy, version), by the orchestrator | n/a |
+
+**Known Wave B hotspots:** the orchestrator owns integration and reads the merged result of each one.
+
+| Area | Conflicting tasks |
+|---|---|
+| `lib/chat.js`, `tests/chat.test.js` | Tasks 4 and 5 (append-only, different functions) |
+| `background.js` `onMessage` dispatch | Tasks 4 and 5 (one new `case` each) |
+| `buildRequest` in `runAction` | Task 3 only; Task 4 and Task 5 build their own requests |
+| `content.js` | Task 4 (`showResultTooltip` refine bar) and Task 5 (new `showAskInput` and a new case) |
+| options permission helpers | Task 2 only |
 
 **Per-task review:**
 1. The implementer finishes with green `npm test`.
-2. Codex (`codex exec -s read-only`) and GLM-5.3 (`opencode run -m ollama-cloud/glm-5.3 --agent plan`) review the branch diff in parallel. The orchestrator reviews it too.
+2. Codex (`codex exec -s read-only`) and GLM-5.3 (`opencode run -m ollama-cloud/glm-5.3 --agent plan`) review `git diff <base>..HEAD` in the worktree in parallel. The orchestrator reviews it too.
 3. Fixes go back to the same implementer.
-4. Rebase, re-run `npm test`, then `git merge --no-ff`.
-5. After Wave C, merge `release/1.1.0` into `main`.
+4. Rebase, `npm test`, then `git merge --no-ff`.
+5. After Wave C, merge `release/1.1.0` into `main`. No push without the user's consent.
 
 ## Global constraints
 
 - No new dependencies and no bundler. `content.js` stays an IIFE with no imports.
-- Pure logic lives in `lib/*.js` and is unit tested. `background.js`, `content.js` and `options.js` are not importable by tests (they use chrome APIs at top level).
-- Listeners are registered synchronously at the top level of `background.js`. This includes the new `onMessage` cases.
-- Every user-visible string in the extension UI is English, matching the existing UI.
+- Pure logic lives in `lib/*.js` and is unit tested. `background.js`, `content.js` and `options.js` are not importable by tests.
+- Listeners are registered synchronously at the top level of `background.js`.
+- Every user-visible UI string is English.
 - `chrome.permissions.request` is called before any `await` inside the click handler.
-- Never call `chrome.permissions.remove` on a pattern that covers manifest `host_permissions` (see the "Permission-subtraction pitfall" in CLAUDE.md).
-- DeepL behaviour does not change:
-  - no streaming;
-  - no refine;
-  - no placeholders beyond the raw selection.
+- Never call `chrome.permissions.remove` on an origin that a manifest `host_permissions` pattern, a webhook or a custom model endpoint still needs (see the "Permission-subtraction pitfall" in CLAUDE.md).
+- DeepL behaviour does not change: no streaming, no refine, raw selection only.
+- Every CSS class in `getShadowStyles()` or `options.css` that sets `display:` needs a matching `[hidden] { display: none }` override (CLAUDE.md "[hidden] pitfall").
+- No test-only exports in production code. Inject timing through parameters.
 - Each task commits separately with a Conventional-Commit-style message ending in:
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
-- Tasks 1–5 do **not** edit `CLAUDE.md`, `PRIVACY.md`, `README.md` or the manifest `version`. Task 6 handles those, to avoid merge conflicts.
+- Tasks 1–5 do **not** edit `CLAUDE.md`, `PRIVACY.md`, `README.md` or the manifest `version`. Task 6 handles those.
 
 ## Review focus
 
-1. **A stream dies mid-way** (Anthropic `event: error`, network drop, idle stall). Expected: an error tooltip, never a frozen partial tooltip. Covered by Task 2 parser/stream tests (`error event throws`, `idle timeout`).
-2. **SSE framing split across network reads** (a line cut in half, `\r\n`, comment lines such as OpenRouter's `: OPENROUTER PROCESSING`, the `[DONE]` sentinel). Covered by Task 2 parser tests.
-3. **The selection contains template syntax or `$` sequences** (`{{context}}`, `$&`, `$1`). Expected: inserted literally, with no second expansion. This also fixes the existing `replaceAll` `$`-pattern bug. Covered by Task 3 renderer tests.
-4. **`custom` base URL variants:**
-   - a trailing `/` and an already-appended `/chat/completions` are normalised;
-   - `http://` to a public host is rejected;
-   - an empty API key is allowed.
+1. **A stream dies mid-way.** Cases:
+   - an Anthropic `event: error`;
+   - an OpenRouter HTTP-200 chunk with a top-level `error` or `finish_reason: "error"`;
+   - EOF without a terminal event after partial text;
+   - malformed JSON;
+   - an idle stall.
 
-   Covered by Task 1 `normalizeBaseUrl` tests.
-5. **The user closes the tooltip mid-stream, then runs another action.** Expected: late `AI_CHUNK`/`AI_RESULT` messages from the cancelled run never re-open a tooltip. Covered by Task 2 (request-id gating plus `CANCEL_ACTION`) and the manual check M3.
+   Expected: an error tooltip, never a "successful" partial result. Covered by Task 1 stream tests.
+2. **SSE framing split across reads.** Cases:
+   - a half line;
+   - `\r\n`;
+   - a multibyte UTF-8 character split across chunks;
+   - comment lines (`: OPENROUTER PROCESSING`);
+   - the `[DONE]` sentinel.
 
----
+   Covered by Task 1 parser and stream tests.
+3. **The selection contains `{{context}}`, `$&` or `$1`.** Expected: inserted literally, with no second expansion. This also fixes the current `replaceAll` `$`-pattern bug. Covered by Task 3 renderer tests.
+4. **`custom` base URL variants.** Cases:
+   - trailing `/`;
+   - an appended `/chat/completions`;
+   - public `http`;
+   - an empty API key.
 
-### Task 1: Custom OpenAI-compatible provider
-
-**Files:**
-- Modify: `lib/api-client.js`. Add a `custom` branch in `callAI` and `fetchAvailableModels`. Add `normalizeBaseUrl`. Extract a shared chat-completions caller.
-- Modify: `lib/storage.js`:
-  - add `custom` to `VALID_PROVIDERS`, `PROVIDER_DISPLAY_NAMES` and `PROVIDER_DEFAULT_MODELS` (default model `''`);
-  - validate in `saveSettings`;
-  - add a `baseUrl` field to model configs.
-- Modify: `options.html`:
-  - add the provider option `<option value="custom">Custom (OpenAI-compatible)</option>`;
-  - add a `.model-config-baseurl` field in `modelConfigTemplate`, hidden unless provider is `custom`;
-  - add a hint: "e.g. http://localhost:11434/v1 (Ollama). Ollama may need OLLAMA_ORIGINS=chrome-extension://*".
-- Modify: `options.js`:
-  - `addModelConfigCard` shows/hides the base URL field via `syncProviderFields`;
-  - `collectModelConfigs` emits `baseUrl`;
-  - Test button and Save request the origin permission;
-  - the model list cache key is `custom:<baseUrl>`.
-- Modify: `background.js`. In `runAction`, the "Missing API key" check is skipped for `provider === 'custom'`. Pass `baseUrl` to `callAI`.
-- Test: `tests/api-client.test.js`, `tests/storage.test.js`
-
-**Interfaces:**
-- Produces:
-  - `normalizeBaseUrl(url: string): string` (exported from `lib/api-client.js`):
-    - trims the input;
-    - strips trailing `/` and a trailing `/chat/completions`;
-    - throws `Error('Invalid base URL')` on unparsable input or a non-http(s) protocol;
-    - throws `Error('Base URL must use HTTPS unless it points to a local or private-network host')` for `http:` with a host outside loopback/private ranges. Loopback/private means: `localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`, `10/8`, `172.16/12`, `192.168/16`, `*.local`.
-  - `isPrivateHost(hostname: string): boolean` (exported).
-  - `callAI({ ..., baseUrl })`: for `provider: 'custom'` it POSTs to `${normalizeBaseUrl(baseUrl)}/chat/completions`. It sends an `Authorization: Bearer` header only when `apiKey` is non-empty and uses `providerName` `'Custom endpoint'` in errors.
-  - Internal shared helper `callChatCompletions({ url, headers, model, messages, maxTokensField, providerName, signal })`. `callOpenAI`, `callOpenRouter` and `callCustom` delegate to it. Task 2 adds streaming **inside this helper**. `maxTokensField` is `'max_completion_tokens'` for OpenAI and `'max_tokens'` for the others.
-  - `fetchAvailableModels('custom', apiKey, signal, baseUrl)` → `GET ${base}/models` and maps `data[].id`.
-  - Model config shape: `{ id, name, provider, model, apiKey, baseUrl? }`. `baseUrl` is stored only for `custom`.
-
-- [ ] **Step 1: write failing tests** in `tests/api-client.test.js`:
-
-```js
-test('normalizeBaseUrl strips trailing slash and /chat/completions', () => {
-  assert.equal(normalizeBaseUrl(' http://localhost:11434/v1/ '), 'http://localhost:11434/v1');
-  assert.equal(normalizeBaseUrl('https://x.example.com/v1/chat/completions'), 'https://x.example.com/v1');
-});
-test('normalizeBaseUrl allows http only for local/private hosts', () => {
-  for (const ok of ['http://127.0.0.1:1234/v1', 'http://192.168.1.5/v1', 'http://10.0.0.2/v1', 'http://172.20.0.1/v1', 'http://nas.local/v1', 'http://[::1]:8080/v1'])
-    assert.doesNotThrow(() => normalizeBaseUrl(ok));
-  assert.throws(() => normalizeBaseUrl('http://api.example.com/v1'), /HTTPS/);
-  assert.throws(() => normalizeBaseUrl('http://172.32.0.1/v1'), /HTTPS/);
-  assert.throws(() => normalizeBaseUrl('ftp://localhost/v1'), /Invalid base URL/);
-  assert.throws(() => normalizeBaseUrl('not a url'), /Invalid base URL/);
-});
-```
-
-  In `tests/storage.test.js` (follow the file's existing `chrome.storage` mock pattern):
-  - `saveSettings accepts a custom config without apiKey`;
-  - `saveSettings rejects custom without baseUrl`, error matching `/base URL/i`;
-  - `saveSettings rejects custom with public http baseUrl`, error matching `/HTTPS/`;
-  - `saveSettings still requires apiKey for openai`.
-- [ ] **Step 2: run.** `npm test`. Expected: the new tests FAIL (`normalizeBaseUrl is not a function` or the validation does not throw).
-- [ ] **Step 3: implement.**
-  - Add `normalizeBaseUrl`/`isPrivateHost`.
-  - Extract `callChatCompletions`.
-  - Add `callCustom`.
-  - Add the `custom` branches in `callAI` and `fetchAvailableModels`.
-  - In `saveSettings`:
-    - `custom` requires `model`;
-    - `baseUrl` is validated via `normalizeBaseUrl`, with its error rethrown as `Model configuration "<name>": <message>`;
-    - `apiKey` is optional only for `custom`.
-
-  `storage.js` must import `normalizeBaseUrl` from `./api-client.js` (no cycle: api-client imports nothing from storage).
-- [ ] **Step 4: wire the options UI.**
-  - Show the base URL field only for `custom`.
-  - Placeholder `http://localhost:11434/v1`.
-  - Model datalist fetch for `custom` uses `fetchAvailableModels('custom', key, signal, baseUrl)`. Refetch on base-URL `input` with the same 600 ms debounce as the API key. Cache key `custom:<normalized baseUrl>` in `modelListCache`.
-  - Test button: for `custom`, first call `chrome.permissions.request({ origins: [new URL(base).origin + '/*'] })` before any await. Show "Permission for <origin> denied" if refused.
-  - `onSave`: add every custom config's origin to the existing `requestWebhookPermissions(...)` call. Rename it to `requestOriginPermissions`; it stays one combined prompt, before any await. Append the warning `custom endpoint permission not granted` when refused.
-- [ ] **Step 5: run.** `npm test`. Expected: all pass.
-- [ ] **Step 6: commit.** `feat: add custom OpenAI-compatible provider (Ollama, LM Studio, vLLM)`
+   Covered by Task 2 tests.
+5. **The user dismisses the spinner or the tooltip mid-run, then runs another action.** Expected: late chunks or results from the cancelled run never re-open UI. Covered by Task 1 (session-unique ids, `CANCEL_ACTION`, spinner Esc) and manual check M3.
 
 ---
 
-### Task 2: Streaming responses and the shared chat runner
+### Task 1 (Wave A): streaming, the shared chat caller and the `runChat` runner
 
 **Files:**
 - Modify: `lib/api-client.js`:
-  - `callAI` accepts `messages` and `onDelta`;
-  - streaming for anthropic / openai / openrouter / custom (via `callChatCompletions`) / google;
-  - an SSE parser;
-  - a stream idle timeout.
-- Create: `lib/chat.js`, holding pure run helpers.
+  - `callAI` accepts `messages`, `onDelta` and `streamTimeouts`;
+  - extract `callChatCompletions`;
+  - streaming for anthropic, openai, openrouter and google;
+  - SSE parser, stream event parser and stream reader;
+  - fix `getDefaultModel` for providers whose default is `''`.
+- Create: `lib/chat.js`
 - Modify: `background.js`:
   - add `runChat`;
   - `runAction` delegates to it;
-  - `AI_CHUNK` throttling;
+  - keepalive;
+  - `AI_CHUNK` throttle;
   - `CANCEL_ACTION`;
-  - `AI_RESULT` gains `actionId`, `conversation`, `sourceText`.
+  - richer `AI_RESULT`;
+  - session-unique request ids.
 - Modify: `content.js`:
-  - `AI_CHUNK` → streaming tooltip;
-  - the final result reuses the streaming tooltip's position;
-  - cancel on dismiss;
-  - shadow styles for `.cmn-streaming`.
+  - streaming tooltip;
+  - `showResultTooltip` options object;
+  - cancel on dismiss, including the spinner;
+  - styles.
 - Test: `tests/api-client.test.js`, create `tests/chat.test.js`
 
-**Interfaces:**
-- Consumes: Task 1 `callChatCompletions`, the `custom` provider and `baseUrl`. Rebase onto Task 1 before review if it has merged.
-- Produces (later tasks rely on these exact names):
-  - `callAI({ provider, apiKey, model, baseUrl, prompt, messages, systemPrompt, targetLang, signal, onDelta }): Promise<string>`:
-    - `messages: Array<{ role: 'user' | 'assistant', content: string }>` takes precedence over `prompt`;
-    - without `messages`, the conversation is `[{ role: 'user', content: prompt }]`;
-    - Gemini maps `assistant` → `model`;
-    - DeepL uses the last user message's content as the text;
-    - `onDelta(fullTextSoFar: string)` is called on each received text delta; when absent, the request is non-streaming exactly as today.
-  - `createSSEParser(onData: (data: string, event: string | null) => void): { push(chunk: string): void, end(): void }` (exported):
-    - handles split lines and `\r\n`;
-    - ignores `:` comment lines and `[DONE]`;
-    - joins multi-line `data:` fields with `\n`.
-  - `extractStreamDelta(provider: string, payload: object): string` (exported):
-    - anthropic: a `content_block_delta` with `delta.type === 'text_delta'` returns `delta.text`; an `error` payload throws `APIError(0, payload.error.message)`;
-    - chat-completions providers: `choices[0].delta.content`;
-    - google: the joined `candidates[0].content.parts[].text`;
-    - otherwise `''`.
-  - `STREAM_IDLE_TIMEOUT_MS = 30_000`: no byte for 30 s → abort and throw `APIError(0, 'API stream stalled')`.
-  - `lib/chat.js` exports:
-    - `shouldStream({ provider, displayMode, editable }): boolean`: true iff `provider !== 'deepl'` and (`displayMode === 'tooltip'` or (`displayMode === 'auto'` and `!editable`));
-    - `pickLLMConfig(configs, configId?)`: the config with `configId` when given and found; otherwise the first config whose `provider !== 'deepl'`; otherwise `null`;
-    - `ASK_ACTION_ID = '__ask__'`;
-    - `createThrottle(fn, ms)`: trailing-edge throttle returning `{ call(arg), flush(), cancel() }`.
-  - `background.js`:
-    - `runChat(tab, settings, buildRequest)`, where `buildRequest: () => Promise<{ config, messages, systemPrompt, targetLang, displayMode, editable, meta: { actionId, actionName, sourceText } }>` runs **after** `AI_PROCESSING_START`. Errors it throws become `AI_ERROR`.
-    - `runAction` becomes: build the request (existing validation and prompt) → `runChat`.
-  - Messages:
-    - `AI_CHUNK { requestId, text, tooltipSettings }`: accumulated text, throttled at 100 ms, sent only when `shouldStream(...)`;
-    - `AI_RESULT` gains `actionId`, `sourceText`, and `conversation` (`[...messages, { role: 'assistant', content: result }]`, or `null` for DeepL);
-    - `CANCEL_ACTION { requestId }` goes content → background and aborts the tab's controller only if its stored request id matches. Store `{ controller, requestId }` per tab in `_abortControllersByTab`.
+**Interfaces (produced; later tasks rely on these exact names):**
 
-- [ ] **Step 1: write failing parser tests** (`tests/api-client.test.js`):
+- **`callAI({ provider, apiKey, model, baseUrl, prompt, messages, systemPrompt, targetLang, signal, onDelta, streamTimeouts }): Promise<string>`**
+  - `messages: Array<{ role: 'user' | 'assistant', content: string }>` takes precedence over `prompt`. Without it, the conversation is `[{ role: 'user', content: prompt }]`.
+  - Gemini maps `assistant` → `model`.
+  - DeepL ignores `messages` history and translates `prompt` (unchanged behaviour).
+  - `onDelta(fullTextSoFar: string)`: when given (and provider ≠ deepl) the request streams. Otherwise the request is byte-identical to today's (no `stream` field).
+  - `streamTimeouts = { idleMs = 30_000, totalMs = 240_000 }`. Tests pass small values.
+  - `baseUrl` is accepted and passed through (used by Task 2).
+- **`callChatCompletions({ url, headers, model, messages, systemPrompt, maxTokensField, providerName, signal, onDelta, streamTimeouts }): Promise<string>`** (exported)
+  - `callOpenAI` and `callOpenRouter` delegate to it. `maxTokensField` is `'max_completion_tokens'` for OpenAI and `'max_tokens'` otherwise.
+  - Task 2's `callCustom` delegates to it too.
+- **`createSSEParser(onData: (data: string, event: string | null) => void): { push(text: string): void, end(): void }`** (exported)
+  - buffers partial lines;
+  - accepts `\n` and `\r\n`;
+  - ignores `:` comments and `data: [DONE]`;
+  - joins multi-line `data:` with `\n`;
+  - dispatches on a blank line;
+  - `end()` flushes a pending event.
+- **`parseStreamEvent(provider: string, payload: object): { delta: string, done: boolean, error: string | null }`** (exported)
+  - anthropic:
+    - `content_block_delta` + `text_delta` → `delta`;
+    - `message_stop` → `done`;
+    - `type: 'error'` → `error = payload.error?.message || 'Stream error'`.
+  - openai / openrouter / custom:
+    - `delta = choices[0].delta.content || ''`;
+    - a top-level `payload.error` → `error = payload.error.message || 'Stream error'`;
+    - `finish_reason === 'error'` → `error`;
+    - any other non-null `finish_reason` → `done`.
+  - google:
+    - `delta` = joined `candidates[0].content.parts[].text`;
+    - `candidates[0].finishReason` present → `done`;
+    - `promptFeedback.blockReason` → `error = 'Blocked (<reason>)'`.
+- **Internal `readStream(response, { provider, providerName, signal, onDelta, idleMs, totalMs }): Promise<string>`**
+  - attaches its **own** abort listener to the external `signal`, because `fetchWithErrorHandling` removes its listener once headers arrive;
+  - decodes with `TextDecoder` (`stream: true`);
+  - parses JSON per data event (a parse failure → `APIError(0, '<providerName> sent malformed stream data')`);
+  - calls `onDelta` with the accumulated text;
+  - on stall → `APIError(0, 'API stream stalled')`;
+  - when over `totalMs` → `APIError(0, 'API response took too long')`;
+  - external abort → `DOMException('Request cancelled', 'AbortError')`;
+  - EOF without `done` → `APIError(0, '<providerName> stream ended unexpectedly')`, even after partial text;
+  - `done` with empty text → the existing "returned an empty response" messages;
+  - always releases the reader, timers and listener.
+- **`getDefaultModel(provider)`** returns `DEFAULT_MODELS[provider]` when the key exists (including `''`). Only unknown providers fall back to anthropic.
+- **`lib/chat.js` exports:**
+  - `shouldStream({ provider, displayMode, editable }): boolean`: `provider !== 'deepl'` and (`displayMode === 'tooltip'` or (`displayMode === 'auto'` and `!editable`));
+  - `pickLLMConfig(configs, configId?)`: the config with `configId` if found; otherwise the first config whose `provider !== 'deepl'`; otherwise `null`;
+  - `ASK_ACTION_ID = '__ask__'`;
+  - `createThrottle(fn, ms)`: trailing-edge, `{ call(arg), flush(), cancel() }`.
+- **`background.js`:**
+  - **Request ids** come from `crypto.randomUUID()`, so content-side comparisons survive a worker restart. `_abortControllersByTab: Map<tabId, { controller, requestId }>`.
+  - **`runChat(tab, settings, buildRequest)`**, where `buildRequest: () => Promise<ChatRequest>` and `ChatRequest = { config, messages, prompt, systemPrompt, targetLang, displayMode, editable, meta: { actionId, actionName, sourceText } }`. The runner:
+    1. aborts the previous run for the tab;
+    2. `ensureContentScript`, then `AI_PROCESSING_START`;
+    3. awaits `buildRequest()` (its throws → `AI_ERROR`);
+    4. checks `signal.aborted` after **every** await;
+    5. starts the keepalive (`setInterval(() => chrome.runtime.getPlatformInfo(), 20_000)`, cleared in `finally`);
+    6. calls `callAI` with `onDelta` only when `shouldStream(...)`;
+    7. on completion → flushes and cancels the throttle, then sends `AI_RESULT`;
+    8. on error → cancels the throttle; if aborted, returns silently; otherwise sends `AI_ERROR`.
+  - **`runAction`** builds its `ChatRequest` (existing validation and `replaceAll` prompt for now; Task 3 swaps the renderer) and calls `runChat`.
+- **Messages:**
+  - `AI_CHUNK { requestId, text, tooltipSettings }`: accumulated text, throttle 100 ms.
+  - `AI_RESULT` adds:
+    - `actionId`;
+    - `sourceText`;
+    - `conversation`: `[...messages, { role: 'assistant', content: result }]`, or `null` when the provider is DeepL.
+  - `CANCEL_ACTION { requestId }` (content → background) aborts only if the tab's stored `requestId` matches.
+- **`content.js`:**
+  - **`showResultTooltip(text, ts, opts = {})`** with `opts = { sendContext?, position?: { top, left }, refine?: { actionId, conversation, sourceText } }`. Task 1 passes `refine` through but does not render it; Task 4 renders it.
+  - In the `AI_RESULT` case, **read the streaming tooltip's top/left before the unconditional `hideOverlay()`**. Then pass `position` for both the `tooltip` and the `auto` → tooltip paths.
+  - **`showStreamingTooltip(text, ts)`** creates the tooltip once and updates its text afterwards:
+    - class `cmn-overlay cmn-tooltip cmn-streaming`;
+    - `textContent` rendering;
+    - a close button;
+    - a CSS caret;
+    - auto-scroll only within 24 px of the bottom.
+  - **Dismissal** (Esc, close or outside click) of the streaming tooltip **and of the spinner**:
+    1. sends `CANCEL_ACTION { requestId: activeRequestId }`;
+    2. sets `activeRequestId = null`;
+    3. `hideOverlay()`.
+
+    The spinner (`showLoading`) gains an Esc handler.
+
+- [ ] **Step 1: failing parser and event tests** (`tests/api-client.test.js`):
 
 ```js
 test('SSE parser buffers split lines, CRLF, comments, DONE', () => {
@@ -234,82 +241,191 @@ test('SSE parser joins multi-line data', () => {
   p.push('data: x\ndata: y\n\n'); p.end();
   assert.deepEqual(got, ['x\ny']);
 });
-test('extractStreamDelta per provider', () => {
-  assert.equal(extractStreamDelta('anthropic', { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } }), 'Hi');
-  assert.equal(extractStreamDelta('anthropic', { type: 'message_start' }), '');
-  assert.equal(extractStreamDelta('openai', { choices: [{ delta: { content: 'a' } }] }), 'a');
-  assert.equal(extractStreamDelta('custom', { choices: [{ delta: {} }] }), '');
-  assert.equal(extractStreamDelta('google', { candidates: [{ content: { parts: [{ text: 'g' }, { text: 'h' }] } }] }), 'gh');
-  assert.throws(() => extractStreamDelta('anthropic', { type: 'error', error: { message: 'Overloaded' } }), /Overloaded/);
+test('parseStreamEvent per provider', () => {
+  assert.deepEqual(parseStreamEvent('anthropic', { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } }), { delta: 'Hi', done: false, error: null });
+  assert.equal(parseStreamEvent('anthropic', { type: 'message_stop' }).done, true);
+  assert.equal(parseStreamEvent('anthropic', { type: 'error', error: { message: 'Overloaded' } }).error, 'Overloaded');
+  assert.equal(parseStreamEvent('openai', { choices: [{ delta: { content: 'a' } }] }).delta, 'a');
+  assert.equal(parseStreamEvent('openrouter', { choices: [{ delta: {}, finish_reason: 'stop' }] }).done, true);
+  assert.equal(parseStreamEvent('openrouter', { error: { message: 'upstream died' }, choices: [{ delta: {}, finish_reason: 'error' }] }).error, 'upstream died');
+  assert.equal(parseStreamEvent('google', { candidates: [{ content: { parts: [{ text: 'g' }, { text: 'h' }] } }] }).delta, 'gh');
+  assert.equal(parseStreamEvent('google', { candidates: [{ content: { parts: [] }, finishReason: 'STOP' }] }).done, true);
+});
+test('getDefaultModel keeps empty defaults', () => {
+  assert.equal(getDefaultModel('deepl'), '');
+  assert.equal(getDefaultModel('nope'), getDefaultModel('anthropic'));
 });
 ```
 
-  Stream integration tests: stub `globalThis.fetch` with a `Response` whose body is a `ReadableStream` of encoded chunks (Node 18+ has both):
-  - `callAI streams anthropic deltas and resolves full text`: `onDelta` receives `['He', 'Hello']` and the call resolves `'Hello'`;
-  - `callAI stream with only an error event rejects`;
-  - `callAI stream that ends empty rejects with /empty response/`;
-  - `callAI non-streaming without onDelta unchanged`: the body has no `stream: true`;
-  - `callAI sends messages multi-turn`: for openai the request body `messages` equals `[system, user, assistant, user]`; for google the `contents[1].role === 'model'`;
-  - `idle timeout`: make the timeout injectable for tests by exporting `_setStreamIdleTimeoutForTests(ms)`, set 20 ms, use a body that never enqueues, expect rejection `/stalled/`.
-- [ ] **Step 2: write failing `tests/chat.test.js`:**
-  - `shouldStream` truth table (deepl → false; tooltip → true; auto + editable → false; auto + !editable → true; insert → false);
-  - `pickLLMConfig` (by id; falls back to first non-DeepL; DeepL-only → null);
-  - `createThrottle` (call ×3 within window → fn called once with the last arg after `ms`; `flush` calls immediately; `cancel` drops). Use `node:test` mock timers: `t.mock.timers.enable({ apis: ['setTimeout'] })`.
-- [ ] **Step 3: run.** `npm test`. Expected: the new tests FAIL.
-- [ ] **Step 4: implement the api-client streaming.**
-  - Request bodies get `stream: true` only when `onDelta` is given:
-    - Anthropic: same URL;
-    - chat completions: same URL;
-    - Gemini: `${GEMINI_BASE_URL}/${model}:streamGenerateContent?alt=sse`.
-  - A non-OK response keeps the existing JSON error path.
-  - Read `response.body` with `TextDecoder` in stream mode. Reset the idle timer on each read. Cancel the reader on `signal` abort and rethrow `DOMException('Request cancelled', 'AbortError')`.
-  - The final empty text throws the same "returned an empty response" messages as the extractors.
-- [ ] **Step 5: implement `lib/chat.js`, `runChat`, the `AI_CHUNK` throttle and `CANCEL_ACTION`.**
-  - The throttle is flushed and cancelled before `AI_RESULT`, so no chunk arrives after the result.
-  - The menu, shortcut and floating-button paths still go through `runAction`.
-- [ ] **Step 6: content.js.**
-  - `AI_CHUNK` (gated by `activeRequestId`) → `showStreamingTooltip(text, ts)`. It creates the tooltip once (class `cmn-overlay cmn-tooltip cmn-streaming`, plain `textContent`, a close button, a blinking caret via CSS) and updates its text afterwards. It auto-scrolls only if the user is within 24 px of the bottom.
-  - Esc, the close button and outside clicks during streaming:
-    - send `CANCEL_ACTION { requestId: activeRequestId }`;
-    - set `activeRequestId = -1`;
-    - call `hideOverlay()`.
-  - `AI_RESULT` in tooltip mode while a streaming tooltip exists: `showResultTooltip(text, ts, sendContext, { position: { top, left } })` reuses its top/left, so there is no jump.
-  - Add `.cmn-streaming` styles in `getShadowStyles()`. Any class with `display:` needs a `[hidden]` override (see the CLAUDE.md pitfall).
-- [ ] **Step 7: run.** `npm test`. Expected: all pass.
-- [ ] **Step 8: commit**, as two commits:
-  - `feat: stream AI responses for tooltip results`
-  - `refactor: route all AI runs through runChat`
-
-  Or one commit if they are inseparable.
+- [ ] **Step 2: failing stream tests.** Stub `globalThis.fetch` per test (restore in `t.after`) with `new Response(new ReadableStream({...}), { status: 200 })` built from encoded string chunks:
+  - `anthropic stream resolves full text`. `onDelta` calls equal `['He', 'Hello']` and it resolves `'Hello'`. Events: `content_block_delta` ×2, then `message_stop`.
+  - `split UTF-8 across chunks`. Bytes of `'zażółć'` split mid-character across two chunks; it resolves `'zażółć'`.
+  - `openrouter error after deltas rejects`. A delta, then `{"error":{"message":"upstream died"},"choices":[{"delta":{},"finish_reason":"error"}]}`; it rejects matching `/upstream died/`.
+  - `EOF after partial text rejects`. A delta with no terminal event; it rejects matching `/ended unexpectedly/`.
+  - `malformed JSON rejects`. `data: {oops`; it rejects matching `/malformed/`.
+  - `idle stall rejects`. A body that never enqueues, `streamTimeouts: { idleMs: 20, totalMs: 1000 }`; it rejects matching `/stalled/`.
+  - `external abort rejects with AbortError`. Abort the controller after the first delta; the rejection has `name === 'AbortError'`.
+  - `non-streaming request unchanged`. Without `onDelta` the parsed request body has no `stream` key.
+  - `multi-turn messages`:
+    - openai body `messages` equals `[{role:'system',...}, user, assistant, user]`;
+    - google body `contents.map(c => c.role)` equals `['user', 'model', 'user']`;
+    - anthropic body `messages` length 3 and `system` set.
+- [ ] **Step 3: failing `tests/chat.test.js`:**
+  - `shouldStream` truth table:
+    - deepl/tooltip → false;
+    - anthropic/tooltip → true;
+    - auto + editable → false;
+    - auto + !editable → true;
+    - insert → false.
+  - `pickLLMConfig`:
+    - by id;
+    - an unknown id falls back to the first non-DeepL;
+    - DeepL-only → `null`;
+    - empty → `null`.
+  - `createThrottle` with `t.mock.timers.enable({ apis: ['setTimeout'] })`:
+    - 3 calls within 100 ms → fn called once with the last arg after a tick of 100;
+    - `flush()` calls immediately with the pending arg;
+    - `cancel()` drops it.
+- [ ] **Step 4: run.** `npm test`. Expected: the new tests FAIL.
+- [ ] **Step 5: implement the api-client parts.** Gemini streaming URL: `${GEMINI_BASE_URL}/${model}:streamGenerateContent?alt=sse`. A non-OK HTTP response keeps the existing JSON error path.
+- [ ] **Step 6: run.** `npm test`. Expected: the api-client tests pass.
+- [ ] **Step 7: implement `lib/chat.js`, `runChat`, keepalive, throttle, `CANCEL_ACTION` and the content-side streaming/cancel/options object.** The menu, shortcut and floating-button paths still go through `runAction`.
+- [ ] **Step 8: run.** `npm test`. Expected: all pass. Then `node --check background.js content.js options.js`, which must print nothing.
+- [ ] **Step 9: commit**, in two commits:
+  - `feat(api): stream provider responses and accept multi-turn messages`
+  - `feat: stream tooltip results through a shared runChat runner`
 
 ---
 
-### Task 3: Page-context placeholders `{{context}}`, `{{pageTitle}}`, `{{pageUrl}}`
+### Task 2 (Wave B): custom OpenAI-compatible provider
+
+**Files:**
+- Modify: `lib/api-client.js`:
+  - `normalizeBaseUrl`, `isPrivateHost`;
+  - `callCustom` (via `callChatCompletions`);
+  - `custom` branches in `callAI`, `fetchAvailableModels` and `getAvailableModels` (→ `[]`);
+  - `DEFAULT_MODELS.custom = ''`;
+  - 403 hint.
+- Modify: `lib/storage.js`:
+  - `custom` in `VALID_PROVIDERS`, `PROVIDER_DISPLAY_NAMES` (`'Custom (OpenAI-compatible)'`) and `PROVIDER_DEFAULT_MODELS` (`''`);
+  - validation in `saveSettings`;
+  - model configs gain `baseUrl`.
+- Modify: `options.html`:
+  - the provider option;
+  - a `.model-config-baseurl` field plus a hint in `modelConfigTemplate`.
+- Modify: `options.js`:
+  - field visibility;
+  - collect `baseUrl`;
+  - model list;
+  - Test button;
+  - Save permissions;
+  - permission-removal protection.
+- Modify: `background.js`:
+  - pass `baseUrl`;
+  - skip the "Missing API key" check for `custom`;
+  - protect custom origins in `handleFloatingToggle`.
+- Test: `tests/api-client.test.js`, `tests/storage.test.js`
+
+**Interfaces:**
+- Consumes: Task 1 `callChatCompletions`, `callAI({ baseUrl })`.
+- Produces:
+  - **`normalizeBaseUrl(url: string): string`:**
+    - trims;
+    - strips trailing `/` and a trailing `/chat/completions`;
+    - throws `Error('Invalid base URL')` for unparsable input or a non-http(s) protocol;
+    - for `http:` to a non-private host, throws `Error('Base URL must use HTTPS unless it points to a local or private-network host')`.
+  - **`isPrivateHost(hostname): boolean`:** `localhost`, `*.localhost`, `*.local`, `127.0.0.0/8`, `::1` (URL hostname `[::1]`), `10/8`, `172.16/12`, `192.168/16`.
+  - **`callAI` for `provider: 'custom'`:**
+    - POSTs to `${normalizeBaseUrl(baseUrl)}/chat/completions`;
+    - sends `Authorization: Bearer` only when `apiKey` is non-empty;
+    - `providerName: 'Custom endpoint'`;
+    - an HTTP 403 → `APIError(403, 'Endpoint refused the request (403). For Ollama, set OLLAMA_ORIGINS=chrome-extension://* and restart it.')`. `APIError.getUserMessage` default passes the message through.
+  - **`fetchAvailableModels('custom', apiKey, signal, baseUrl)`** → `GET ${base}/models` → `data[].id`.
+  - **Model config shape:** `{ id, name, provider, model, apiKey, baseUrl? }`. `baseUrl` is stored only for `custom`.
+  - **Exported pure helper `customOrigins(configs): string[]`** in `lib/storage.js`. Returns the `new URL(normalizeBaseUrl(c.baseUrl)).origin + '/*'` of each valid custom config, deduped. Used by options and background.
+
+- [ ] **Step 1: failing tests** (`tests/api-client.test.js`):
+
+```js
+test('normalizeBaseUrl strips trailing slash and /chat/completions', () => {
+  assert.equal(normalizeBaseUrl(' http://localhost:11434/v1/ '), 'http://localhost:11434/v1');
+  assert.equal(normalizeBaseUrl('https://x.example.com/v1/chat/completions'), 'https://x.example.com/v1');
+});
+test('normalizeBaseUrl allows http only for local/private hosts', () => {
+  for (const ok of ['http://127.0.0.1:1234/v1', 'http://192.168.1.5/v1', 'http://10.0.0.2/v1', 'http://172.20.0.1/v1', 'http://nas.local/v1', 'http://[::1]:8080/v1', 'http://app.localhost/v1'])
+    assert.doesNotThrow(() => normalizeBaseUrl(ok), ok);
+  assert.throws(() => normalizeBaseUrl('http://api.example.com/v1'), /HTTPS/);
+  assert.throws(() => normalizeBaseUrl('http://172.32.0.1/v1'), /HTTPS/);
+  assert.throws(() => normalizeBaseUrl('ftp://localhost/v1'), /Invalid base URL/);
+  assert.throws(() => normalizeBaseUrl('not a url'), /Invalid base URL/);
+});
+test('custom provider: no auth header without key, defaults', async (t) => { /* stub fetch, assert URL === 'http://localhost:11434/v1/chat/completions' and no Authorization header; getAvailableModels('custom') deepEquals []; getDefaultModel('custom') === '' */ });
+```
+
+  `tests/storage.test.js` (existing mock pattern):
+  - `custom without apiKey saves`;
+  - `custom without baseUrl` rejects, matching `/base URL/i`;
+  - `custom with public http` rejects, matching `/HTTPS/`;
+  - `custom without model` rejects, matching `/must have a model/`;
+  - `openai still requires apiKey`;
+  - `customOrigins dedupes and skips invalid`.
+- [ ] **Step 2: run.** `npm test`. Expected: FAIL.
+- [ ] **Step 3: implement the api-client and storage parts.**
+  - The `saveSettings` custom error format is `Model configuration "<name>": <normalizeBaseUrl message>`.
+  - `storage.js` imports from `./api-client.js`. There is no cycle.
+- [ ] **Step 4: run.** `npm test`. Expected: pass.
+- [ ] **Step 5: options UI.**
+  - `syncProviderFields` shows `.model-config-baseurl` only for `custom`. Placeholder `http://localhost:11434/v1`. Hint: `Ollama: http://localhost:11434/v1, LM Studio: http://localhost:1234/v1. Ollama may need OLLAMA_ORIGINS=chrome-extension://*`.
+  - Model datalist for custom:
+    - fetch via `fetchAvailableModels('custom', key, signal, baseUrl)`;
+    - cache key `custom:<normalized baseUrl>`;
+    - refetch on base-URL `input` (600 ms debounce);
+    - skip while the base URL is invalid.
+  - Test button for custom:
+    - no empty-key guard;
+    - `chrome.permissions.request({ origins: [origin + '/*'] })` before any await (on refusal show `Permission for <origin> denied`);
+    - pass `baseUrl`.
+  - `onSave`:
+    - rename `requestWebhookPermissions` → `requestOriginPermissions(urls)`, called with webhook URLs **plus** the custom origins (one prompt, before any await);
+    - add the custom origins to the post-all-sites re-request list;
+    - warning `custom endpoint permission not granted`.
+  - `removeFloatingDomain` (options) and `handleFloatingToggle` (background) skip `permissions.remove` when a custom config's origin host equals the domain.
+- [ ] **Step 6: run.** `npm test` and `node --check options.js background.js`. Expected: pass.
+- [ ] **Step 7: commit.** `feat: add custom OpenAI-compatible provider (Ollama, LM Studio, vLLM)`
+
+---
+
+### Task 3 (Wave B): page-context placeholders `{{context}}`, `{{pageTitle}}`, `{{pageUrl}}`
 
 **Files:**
 - Create: `lib/prompt.js`
 - Modify: `background.js`:
   - `runAction`'s `buildRequest` renders via `renderActionPrompt`;
-  - add `getPageContext(tabId)` (`chrome.scripting.executeScript`), called only when the template uses `{{context}}`, `{{pageTitle}}` or `{{pageUrl}}`.
-- Modify: `options.html`. The action hint lists the placeholders: "Placeholders: {{text}} (required), {{context}} (surrounding paragraph), {{pageTitle}}, {{pageUrl}}".
+  - add `getPageContext(tabId)`, called only when `templateUsesPageContext`.
+- Modify: `options.html`. Action hint: `Placeholders: {{text}} (required), {{context}} (surrounding paragraph), {{pageTitle}}, {{pageUrl}}`.
 - Test: create `tests/prompt.test.js`
 
 **Interfaces:**
-- Consumes: Task 2 `runChat`/`buildRequest`.
+- Consumes: Task 1 `runChat` / `ChatRequest`.
 - Produces (`lib/prompt.js`):
   - `ACTION_PLACEHOLDERS = ['text', 'context', 'pageTitle', 'pageUrl']`;
-  - `renderActionPrompt(template: string, vars: Record<string, string>): string`. One pass with `/\{\{(text|context|pageTitle|pageUrl)\}\}/g` and a function replacer. Missing vars → `''`. Unknown `{{x}}` stays untouched. Values are never re-scanned.
-  - `templateUsesPageContext(template: string): boolean`: true when the template contains any of the three non-`text` placeholders.
-  - `windowAround(text: string, start: number, end: number, max = 2000): string`:
-    - returns `text` if `text.length <= max`;
-    - otherwise a slice of length ≤ `max` that contains `[start, end)`, centred on it, with `…` prefixed/suffixed where cut;
-    - if the selection alone exceeds `max`, returns `text.slice(start, end)`.
-- `getPageContext(tabId) → { context, pageTitle, pageUrl }`:
-  - the injected func returns `{ blockText, start, end, title: document.title, url: location.href }`;
-  - for a text control: `blockText = el.value`, with the selection offsets;
-  - otherwise: the nearest ancestor of the range's `commonAncestorContainer` matching `p,li,td,th,blockquote,pre,dd,article,section,div` whose `innerText.length >= selection.length`, with offsets found via `innerText.indexOf(selectionText)` (fallback: start 0);
-  - the background applies `windowAround`;
-  - on restricted pages it returns empty strings, and `pageUrl`/`pageTitle` fall back to `tab.url`/`tab.title`.
+  - `renderActionPrompt(template, vars): string`. One pass with `/\{\{(text|context|pageTitle|pageUrl)\}\}/g` and a function replacer. Missing vars → `''`. Unknown `{{x}}` stays. Values are never re-scanned.
+  - `templateUsesPageContext(template): boolean`;
+  - `windowAround(text, start, end, max = 2000): string`:
+    - `text` unchanged if `length <= max`;
+    - if the selection alone exceeds `max`, `text.slice(start, end)`;
+    - otherwise a window of ≤ `max` chars containing `[start, end)`, centred, with `…` on each cut side.
+- `getPageContext(tabId) → { context, pageTitle, pageUrl }`. The injected func is self-contained and returns `{ blockText, start, end, title, url }`:
+  - **Text control** (`document.activeElement` is a textarea or input with a non-empty selection): `blockText = el.value`, with `selectionStart`/`selectionEnd`.
+  - **Otherwise:**
+    - `range = getSelection().getRangeAt(0)`;
+    - collapsed or no range → `blockText = ''`;
+    - block = the closest element ancestor of `range.commonAncestorContainer` matching `p,li,td,th,blockquote,pre,dd,article,section,div`, else `document.body`;
+    - offsets come from a prefix range: `pre.selectNodeContents(block); pre.setEnd(range.startContainer, range.startOffset); start = pre.toString().length; end = start + range.toString().length`;
+    - `blockText = block.textContent`. This is exact for repeated text.
+  - The background applies `windowAround`.
+  - On restricted pages or a throw, `context = ''` and title/url fall back to `tab.title`/`tab.url`.
+- DeepL actions keep the raw selection and skip rendering.
 
 - [ ] **Step 1: failing tests** (`tests/prompt.test.js`):
 
@@ -334,46 +450,61 @@ test('windowAround keeps selection, marks cuts, respects max', () => {
   assert.ok(out.length <= 102);
   assert.equal(windowAround('short', 0, 5, 100), 'short');
   assert.equal(windowAround('x'.repeat(300), 0, 300, 100), 'x'.repeat(300));
+  assert.ok(windowAround('S' + 'b'.repeat(500), 0, 1, 100).startsWith('S'));
 });
 ```
 
 - [ ] **Step 2: run.** `npm test`. Expected: FAIL (module missing).
-- [ ] **Step 3: implement `lib/prompt.js` and wire it into the background.** The DeepL path keeps the raw selection.
-- [ ] **Step 4: run.** `npm test`. Expected: all pass.
+- [ ] **Step 3: implement `lib/prompt.js`, `getPageContext` and the `buildRequest` change.**
+- [ ] **Step 4: run.** `npm test` and `node --check background.js`. Expected: pass.
 - [ ] **Step 5: commit.** `feat: add {{context}}, {{pageTitle}}, {{pageUrl}} action placeholders`
 
 ---
 
-### Task 4: Refine the result in the tooltip
+### Task 4 (Wave B): refine the result in the tooltip
 
 **Files:**
-- Modify: `lib/chat.js`. Add `REFINE_PRESETS`, `buildRefineMessages`, `sanitizeConversation`.
-- Modify: `background.js`:
-  - `REFINE_ACTION` handler → `runChat` with `displayMode: 'tooltip'`;
-  - config resolution: `actionId === ASK_ACTION_ID` → `pickLLMConfig(configs)`, else the action's `modelConfigId` via `pickLLMConfig(configs, action.modelConfigId)`.
+- Modify: `lib/chat.js`. Add `REFINE_PRESETS`, `MAX_CONVERSATION_MESSAGES`, `buildRefineMessages`, `sanitizeConversation`.
+- Modify: `background.js`. Add a `REFINE_ACTION` case and `handleRefine`.
 - Modify: `content.js`:
-  - the refine bar in `showResultTooltip`, shown only when `conversation` is non-null;
-  - shadow styles.
+  - render `opts.refine` in `showResultTooltip`;
+  - styles.
+  - The `AI_RESULT` case passes `refine: { actionId, conversation, sourceText }` when `message.conversation` is non-null.
 - Test: `tests/chat.test.js`
 
 **Interfaces:**
-- Consumes: Task 2 `AI_RESULT.conversation/actionId/sourceText`, `runChat`, `pickLLMConfig`, `ASK_ACTION_ID`.
+- Consumes: Task 1 `runChat`, `pickLLMConfig`, `ASK_ACTION_ID`, the `showResultTooltip` `opts.refine` slot, and the `AI_RESULT.conversation/actionId/sourceText` fields.
 - Produces:
-  - `REFINE_PRESETS = { shorter: 'Make it shorter. Return only the revised text.', longer: 'Expand it with more detail. Return only the revised text.', simpler: 'Rewrite it in simpler language. Return only the revised text.' }`;
-  - `buildRefineMessages(conversation, instruction: string | null)`:
-    - `instruction === null` (Retry) → the conversation without its trailing assistant message;
-    - otherwise → the conversation plus `{ role: 'user', content: instruction.trim() }`;
-  - `sanitizeConversation(value): Array | null`:
-    - returns `null` unless it is an array of 1–21 items with `role ∈ {user, assistant}` and string `content` (≤ 100 000 chars each), starting with `user` and alternating;
-    - when longer than 21, keep the first message plus the last 20, re-aligned so roles still alternate;
-  - message `REFINE_ACTION { actionId, conversation, instruction, sourceText }` goes content → background. The background drops it silently if `sanitizeConversation` returns null or the action/config cannot be resolved, otherwise shows an `AI_ERROR` such as "Action no longer exists".
-- UI:
-  - a row under the content: buttons `Shorter`, `Longer`, `Simpler`, `↻ Retry`, plus an input with placeholder `Follow up…` (Enter submits; empty input is ignored);
-  - while a refine runs, the spinner flow takes over (`AI_PROCESSING_START`), then the streaming tooltip;
-  - the tooltip anchor stays at the last selection rect;
-  - keyboard events in the input must not bubble to the page: `stopPropagation` on `keydown`/`keyup`/`keypress`. Esc still closes the tooltip.
+  - `REFINE_PRESETS = { shorter: 'Make it shorter. Return only the revised text.', longer: 'Expand it with more detail. Return only the revised text.', simpler: 'Rewrite it in simpler language. Return only the revised text.' }`.
+  - `MAX_CONVERSATION_MESSAGES = 20`.
+  - `sanitizeConversation(value): Array | null`. Valid means:
+    - a non-empty array of `{ role, content }`;
+    - `role ∈ {user, assistant}`;
+    - `content` a string of ≤ 100 000 chars;
+    - starts with `user`, strictly alternates, ends with `assistant` (so the length is even).
 
-- [ ] **Step 1: failing tests** (`tests/chat.test.js`):
+    Anything else → `null`. If the length exceeds `MAX_CONVERSATION_MESSAGES`, keep the first 2 messages plus the last 18. Pairs keep the alternation.
+  - `buildRefineMessages(conversation, instruction: string | null)`:
+    - `null` (Retry) → the conversation without its trailing assistant message;
+    - otherwise → the conversation plus `{ role: 'user', content: instruction.trim() }`.
+  - Message `REFINE_ACTION { actionId, conversation, instruction, sourceText }` goes content → background → `runChat(tab, settings, buildRequest)`. `buildRequest` throws (so `AI_ERROR` goes through the START gating) in these cases:
+
+    | Condition | Error |
+    |---|---|
+    | `sanitizeConversation` → null | `'This result can no longer be refined'` |
+    | the action is missing (unless `ASK_ACTION_ID`) | `'Action no longer exists'` |
+    | no LLM config | `'No LLM model configured'` |
+    | the resolved config is DeepL | `'Refine is not available for DeepL'` |
+
+    Config resolution: `ASK_ACTION_ID` → `pickLLMConfig(configs)`, otherwise `pickLLMConfig(configs, action.modelConfigId)`.
+
+    The request uses `displayMode: 'tooltip'`, `messages: buildRefineMessages(...)` and the settings' `systemPrompt`, plus `meta: { actionId, actionName: action?.name || 'Ask', sourceText }`.
+- **UI:** a row under the content holds buttons `Shorter`, `Longer`, `Simpler`, `↻ Retry` and an input with placeholder `Follow up…`.
+  - Enter submits, except when `e.isComposing`. An empty input is ignored.
+  - The input's `keydown`/`keyup`/`keypress` call `stopPropagation()`. The input handles Esc itself (`hideOverlay()`), because the document-level Esc handler no longer sees it.
+  - The refine bar is not rendered when `opts.refine` is absent (DeepL and insert paths).
+
+- [ ] **Step 1: failing tests:**
 
 ```js
 const conv = [{ role: 'user', content: 'P' }, { role: 'assistant', content: 'R' }];
@@ -383,48 +514,69 @@ test('buildRefineMessages appends instruction / drops last answer on retry', () 
 });
 test('sanitizeConversation rejects malformed input', () => {
   assert.equal(sanitizeConversation(null), null);
+  assert.equal(sanitizeConversation([]), null);
   assert.equal(sanitizeConversation([{ role: 'assistant', content: 'x' }]), null);
-  assert.equal(sanitizeConversation([{ role: 'user', content: 1 }]), null);
-  assert.equal(sanitizeConversation([{ role: 'system', content: 'x' }]), null);
+  assert.equal(sanitizeConversation([{ role: 'user', content: 'x' }]), null); // must end with assistant
+  assert.equal(sanitizeConversation([{ role: 'user', content: 1 }, { role: 'assistant', content: 'r' }]), null);
+  assert.equal(sanitizeConversation([{ role: 'system', content: 'x' }, { role: 'assistant', content: 'r' }]), null);
   assert.deepEqual(sanitizeConversation(conv), conv);
 });
-test('sanitizeConversation trims long history keeping first message and alternation', () => {
-  const long = Array.from({ length: 41 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: String(i) }));
+test('sanitizeConversation trims to first pair + last 18', () => {
+  const long = Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: String(i) }));
   const out = sanitizeConversation(long);
-  assert.ok(out.length <= 21);
-  assert.equal(out[0].content, '0');
+  assert.equal(out.length, 20);
+  assert.deepEqual(out.slice(0, 3).map(m => m.content), ['0', '1', '22']);
   out.forEach((m, i) => i && assert.notEqual(m.role, out[i - 1].role));
 });
 ```
 
 - [ ] **Step 2: run.** `npm test`. Expected: FAIL.
-- [ ] **Step 3: implement the helpers, the background handler and the content refine bar.**
-- [ ] **Step 4: run.** `npm test`. Expected: all pass.
+- [ ] **Step 3: implement the helpers, `handleRefine` and the refine bar.**
+- [ ] **Step 4: run.** `npm test` and `node --check background.js content.js`. Expected: pass.
 - [ ] **Step 5: commit.** `feat: refine results in the tooltip (shorter, longer, simpler, retry, follow-up)`
 
 ---
 
-### Task 5: "Ask about selection…"
+### Task 5 (Wave B): "Ask about selection…"
 
 **Files:**
 - Modify: `lib/chat.js`. Add `buildAskPrompt`.
 - Modify: `background.js`:
-  - menu item `contexthelper-ask` "Ask about selection…" (contexts `['selection']`), created after the action items and before the separator;
-  - command `ask-selection`;
+  - the context menu always has the parent and the Ask item (`contexthelper-ask`, "Ask about selection…", contexts `['selection']`), even with zero actions; restructure the early return in `rebuildContextMenuNow`;
+  - an `ask-selection` command branch in `handleCommand` before `COMMAND_SLOT_RE`;
   - `ASK_PROMPT` → content;
-  - `RUN_ASK` handler → `runChat` with `meta.actionId = ASK_ACTION_ID`, `actionName: 'Ask'`, `displayMode: 'tooltip'`.
+  - a `RUN_ASK` handler.
 - Modify: `manifest.json`. Add `"ask-selection": { "description": "Ask a question about the selected text" }` with no `suggested_key`.
-- Modify: `content.js`. Add the `ASK_PROMPT` case and `showAskInput(selectionText, ts)`. It is an overlay at the selection rect with a single-line input (placeholder `Ask about the selection…`), an `Ask` button and Esc to close. Submit sends `RUN_ASK { question, selectionText }`. Use the same keyboard `stopPropagation` as Task 4.
+- Modify: `content.js`:
+  - an `ASK_PROMPT` case;
+  - `showAskInput(selectionText, ts)`;
+  - styles.
 - Test: `tests/chat.test.js`
 
 **Interfaces:**
-- Consumes: Task 2 `runChat`, `pickLLMConfig`, `ASK_ACTION_ID`, `getSelectionFromTab` (existing) and `showTabNotice` (existing).
+- Consumes: Task 1 `runChat`, `pickLLMConfig`, `ASK_ACTION_ID`; existing `getSelectionFromTab`, `showTabNotice`, `ensureContentScript`.
 - Produces:
-  - `buildAskPrompt(question: string, text: string): string` returns `` `${question.trim()}\n\nSelected text:\n"""\n${text}\n"""` ``;
-  - messages `ASK_PROMPT { selectionText, tooltipSettings }` (background → content) and `RUN_ASK { question, selectionText }` (content → background). The background ignores an empty or whitespace question or an empty selection.
-  - No LLM config: `showTabNotice(tabId, 'Ask needs an LLM model — add one in the extension settings (DeepL cannot answer questions)', settings)`.
-  - The command path reuses `getSelectionFromTab`. An empty selection → `showTabNotice(..., 'Select some text first', ...)`.
-  - The result is refinable automatically through Task 4 (`conversation` + `ASK_ACTION_ID`). Nothing extra is needed here if Task 4 is merged; if it is not yet, nothing breaks.
+  - **`buildAskPrompt(question, text)`** returns `` `${question.trim()}\n\nSelected text:\n"""\n${text}\n"""` ``.
+  - **`ASK_PROMPT { selectionText, tooltipSettings }`** (background → content). Flow:
+    - **Menu path:** the selection comes from `info.selectionText`.
+    - **Command path:** `getSelectionFromTab`. An empty selection → `showTabNotice('Select some text first')`.
+    - **No LLM config:** `showTabNotice(tabId, 'Ask needs an LLM model — add one in the extension settings (DeepL cannot answer questions)', settings)`.
+  - **`RUN_ASK { question, selectionText }`** (content → background). It is ignored when the question or selection is blank. Otherwise it calls `runChat` with this request:
+    - `messages: [{ role: 'user', content: buildAskPrompt(...) }]`;
+    - `displayMode: 'tooltip'`;
+    - `editable: false`;
+    - `meta: { actionId: ASK_ACTION_ID, actionName: 'Ask', sourceText }`;
+    - `systemPrompt` from settings.
+  - **`showAskInput`:**
+    - stores `selectionText` and the anchor rect **before** focusing anything;
+    - is an overlay at `lastSelectionRect`;
+    - holds a single-line input (placeholder `Ask about the selection…`, `autofocus` via `input.focus()` after append) and an `Ask` button;
+    - Enter submits (not while `isComposing`);
+    - Esc is handled on the input (`hideOverlay()`);
+    - the input's key events call `stopPropagation()`;
+    - an outside mousedown closes it (same delayed pattern as the result tooltip);
+    - on submit: `hideOverlay()`, then `sendMessage RUN_ASK`.
+  - The result is refinable through Task 4 automatically (`conversation` + `ASK_ACTION_ID`).
 
 - [ ] **Step 1: failing test:**
 
@@ -435,34 +587,39 @@ test('buildAskPrompt', () => {
 ```
 
 - [ ] **Step 2: run.** `npm test`. Expected: FAIL.
-- [ ] **Step 3: implement** the helper, menu item, command, handlers and content input. The `ask-selection` command must be handled in `handleCommand` before the `COMMAND_SLOT_RE` early return.
-- [ ] **Step 4: run.** `npm test`. Expected: all pass.
+- [ ] **Step 3: implement** the helper, menu, command, handlers and input.
+- [ ] **Step 4: run.** `npm test`, `node --check background.js content.js`, and `node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"`. Expected: pass.
 - [ ] **Step 5: commit.** `feat: add "Ask about selection" ad-hoc prompt`
 
 ---
 
-### Task 6 (orchestrator): docs, privacy, version, manual checks
+### Task 6 (Wave C, orchestrator): docs, privacy, version, manual checks
 
 **Files:** `CLAUDE.md`, `PRIVACY.md`, `README.md`, `manifest.json` (`version` → `1.1.0`)
 
 - [ ] **Step 1: update `CLAUDE.md`.**
   - Message protocol: add `AI_CHUNK`, `CANCEL_ACTION`, `REFINE_ACTION`, `ASK_PROMPT`, `RUN_ASK`, and the new `AI_RESULT` fields.
-  - The `runChat` runner and streaming rules (tooltip-only, insert stays atomic, idle timeout).
-  - The `custom` provider in "Adding a new AI provider" (baseUrl, optional key, per-origin permission, cache key).
-  - Action template syntax: the new placeholders and the single-pass renderer.
+  - `runChat`:
+    - streaming rules (tooltip-only, insert atomic, idle/total timeouts, terminal-event requirement);
+    - keepalive;
+    - session-unique ids.
+  - The `custom` provider:
+    - in "Adding a new AI provider" and "Model lists";
+    - in the permission-subtraction protections.
+  - Template syntax: the new placeholders and the single-pass renderer.
   - Architecture tree: `lib/chat.js`, `lib/prompt.js`.
 - [ ] **Step 2: update `PRIVACY.md`.**
-  - `{{context}}`/`{{pageTitle}}`/`{{pageUrl}}` send page data to the chosen provider only when the user's template uses them.
+  - Page data is sent only when the template uses it.
   - The custom endpoint receives the prompts.
 - [ ] **Step 3: README feature list. Bump `manifest.json` to `1.1.0`.**
 - [ ] **Step 4: `npm test` green. Commit** `docs: document 1.1.0 features and bump version`.
-- [ ] **Step 5: manual checks for the user** (no browser in the agent environment):
-  - **M1:** streaming in the tooltip for Anthropic, OpenAI, Gemini and OpenRouter.
+- [ ] **Step 5: manual checks for the user** (no browser in the agent environment; run with DevTools **closed**, since an open inspector keeps the worker alive):
+  - **M1:** streaming for Anthropic, OpenAI, Gemini and OpenRouter, plus a slow reasoning model (>30 s to first token).
   - **M2:** an insert-mode action in a textarea still replaces the text atomically.
-  - **M3:** Esc mid-stream, then another action. No stale tooltip.
-  - **M4:** Shorter / Retry / Follow up in the tooltip.
-  - **M5:** `{{context}}` on an article paragraph and inside a textarea.
-  - **M6:** Ask via the menu and via the `ask-selection` shortcut (assigned in `chrome://extensions/shortcuts`).
-  - **M7:** Ollama `http://localhost:11434/v1`: permission prompt, Test, streaming, and a CORS hint if 403.
+  - **M3:** Esc on the spinner, and Esc mid-stream, then another action. No stale tooltip.
+  - **M4:** Shorter / Retry / Follow up. Typing in the follow-up input on a page with global hotkeys (e.g. GitHub, Gmail) does not trigger them.
+  - **M5:** `{{context}}` on an article paragraph, inside a textarea, and with the same word repeated in a paragraph.
+  - **M6:** Ask via the menu, via the `ask-selection` shortcut (assigned in `chrome://extensions/shortcuts`), and with zero actions configured.
+  - **M7:** Ollama `http://localhost:11434/v1`: permission prompt, Test, streaming, and the 403 hint without `OLLAMA_ORIGINS`.
   - **M8:** a DeepL action shows no refine bar and no streaming.
 - [ ] **Step 6: merge `release/1.1.0` into `main`** (`--no-ff`). Do not push without the user's consent.
