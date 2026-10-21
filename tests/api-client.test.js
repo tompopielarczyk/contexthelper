@@ -514,3 +514,16 @@ test('non-streaming error status still surfaces the body message', async (t) => 
     /model not found/
   );
 });
+
+test('openai stream chunk with finish_reason length counts as done', async (t) => {
+  // No [DONE] and the body hangs: only finish_reason can end the read
+  stubFetch(t, () => streamResponse([
+    chatDelta('cut '),
+    sse({ choices: [{ delta: { content: 'off' }, finish_reason: 'length' }] })
+  ], { hang: true }));
+  const result = await callAI({
+    provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+    streamTimeouts: { idleMs: 1000, totalMs: 2000 }
+  });
+  assert.equal(result, 'cut off');
+});
