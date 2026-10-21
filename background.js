@@ -693,6 +693,17 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
   let sendChain = Promise.resolve();
   const send = (message) => (sendChain = sendChain.then(() => sendToTab(tab.id, message)));
 
+  // Heartbeats stop before the terminal message is enqueued, and one that
+  // was already queued becomes a no-op once the run ended (or was aborted),
+  // so AI_HEARTBEAT can never follow AI_RESULT / AI_ERROR
+  let ended = false;
+  const stopHeartbeat = () => {
+    ended = true;
+    clearInterval(keepalive);
+  };
+  const sendHeartbeat = () => (sendChain = sendChain.then(() =>
+    ended || signal.aborted ? false : sendToTab(tab.id, { type: 'AI_HEARTBEAT', requestId })));
+
   try {
     const contentReady = await ensureContentScript(tab.id);
     if (!contentReady || signal.aborted) return;
@@ -712,7 +723,7 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     // through the same ordered chain as every other message of the run.
     keepalive = setInterval(() => {
       chrome.runtime.getPlatformInfo().catch(() => {});
-      if (!signal.aborted) send({ type: 'AI_HEARTBEAT', requestId });
+      if (!ended && !signal.aborted) sendHeartbeat();
     }, KEEPALIVE_INTERVAL_MS);
 
     const request = await buildRequest();
@@ -755,6 +766,7 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     // Cancel, never flush: AI_RESULT carries the full text, and a last chunk
     // would flash the streaming tooltip for an answer that finished fast
     throttle?.cancel();
+    stopHeartbeat();
 
     const conversationBase = messages?.length ? messages : [{ role: 'user', content: prompt }];
 
@@ -785,6 +797,7 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
   } catch (err) {
     // Never flush here: a late chunk after AI_ERROR would re-open the stream view
     throttle?.cancel();
+    stopHeartbeat();
     if (signal.aborted) return;
     if (!canReportToTab) return;
     await send({
@@ -796,7 +809,7 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
       tooltipSettings
     });
   } finally {
-    clearInterval(keepalive);
+    stopHeartbeat(); // safety net (early returns, aborts)
     if (_abortControllersByTab.get(tab.id)?.controller === controller) {
       _abortControllersByTab.delete(tab.id);
     }
