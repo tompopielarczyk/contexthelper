@@ -1,4 +1,4 @@
-import { getSettings, saveSettings, onSettingsChanged, isFirstRun, markInitialized } from './lib/storage.js';
+import { getSettings, saveSettings, onSettingsChanged, isFirstRun, markInitialized, customOrigins } from './lib/storage.js';
 import { callAI } from './lib/api-client.js';
 import { sendWebhook, renderTemplate } from './lib/webhook.js';
 import { shouldStream, createThrottle, isRetryableError } from './lib/chat.js';
@@ -234,7 +234,9 @@ async function handleFloatingToggle(info, tab) {
     // subtraction — same pitfall as the all-sites untoggle in options.js)
     const isApiHost = chrome.runtime.getManifest().host_permissions
       .some(pattern => pattern.includes(`//${host}/`));
-    if (!usedByWebhook && !isApiHost) {
+    // A custom model endpoint on this host still needs its grant
+    const usedByCustom = customOrigins(settings.modelConfigs).some(pattern => new URL(pattern).hostname === host);
+    if (!usedByWebhook && !isApiHost && !usedByCustom) {
       try { await chrome.permissions.remove({ origins: floatingOriginsForHost(host) }); } catch { /* keep the grant */ }
     }
     return;
@@ -413,7 +415,8 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
     if (!config) {
       throw new Error('No model configured. Please add a model in the extension settings.');
     }
-    if (!config.apiKey) {
+    // Custom endpoints (Ollama, LM Studio) may run without a key
+    if (!config.apiKey && config.provider !== 'custom') {
       throw new Error('Missing API key. Please configure the API key in settings.');
     }
 

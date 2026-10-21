@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   originPatternForUrl,
+  requestOriginPermissions,
   sendWebhook,
   renderTemplate,
   DEFAULT_WEBHOOK_TEMPLATE,
@@ -82,4 +83,20 @@ test('sendWebhook rejects non-local HTTP before fetch', async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('requestOriginPermissions merges webhook URLs and origin patterns into one request', async () => {
+  const requests = [];
+  globalThis.chrome = { permissions: { request: async (p) => { requests.push(p); return true; } } };
+  assert.equal(await requestOriginPermissions([
+    'https://hooks.example.com/a?x=1',
+    'https://hooks.example.com/b',
+    'http://localhost:11434/*',
+    'not a url'
+  ]), true);
+  assert.deepEqual(requests, [{ origins: ['https://hooks.example.com/*', 'http://localhost:11434/*'] }]);
+
+  requests.length = 0;
+  assert.equal(await requestOriginPermissions([]), true);
+  assert.equal(requests.length, 0);
 });

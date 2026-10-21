@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { saveSettings } from '../lib/storage.js';
+import { saveSettings, customOrigins } from '../lib/storage.js';
 
 function validSettings(overrides = {}) {
   return {
@@ -170,4 +170,66 @@ test('fails before writing when sync payload exceeds per-item quota', async () =
 
   assert.equal(calls.sync.length, 0);
   assert.equal(calls.local.length, 0);
+});
+
+// ── Custom OpenAI-compatible provider ──
+
+function customConfig(overrides = {}) {
+  return { id: 'mc_1', name: 'Local', provider: 'custom', model: 'llama3', apiKey: '', baseUrl: 'http://localhost:11434/v1', ...overrides };
+}
+
+test('custom without apiKey saves', async () => {
+  const calls = installChromeStorageMock();
+  await assert.doesNotReject(() => saveSettings(validSettings({ modelConfigs: [customConfig()] })));
+  assert.equal(calls.local[0].modelConfigs[0].baseUrl, 'http://localhost:11434/v1');
+});
+
+test('custom without baseUrl rejects', async () => {
+  installChromeStorageMock();
+  await assert.rejects(() => saveSettings(validSettings({ modelConfigs: [customConfig({ baseUrl: '' })] })), /base URL/i);
+});
+
+test('custom with public http rejects', async () => {
+  installChromeStorageMock();
+  await assert.rejects(
+    () => saveSettings(validSettings({ modelConfigs: [customConfig({ baseUrl: 'http://api.example.com/v1' })] })),
+    (err) => /HTTPS/.test(err.message) && err.message.startsWith('Model configuration "Local": ')
+  );
+});
+
+test('custom without model rejects', async () => {
+  installChromeStorageMock();
+  await assert.rejects(() => saveSettings(validSettings({ modelConfigs: [customConfig({ model: ' ' })] })), /must have a model/);
+});
+
+test('openai still requires apiKey', async () => {
+  installChromeStorageMock();
+  await assert.rejects(() => saveSettings(validSettings({
+    modelConfigs: [{ id: 'mc_1', name: 'GPT', provider: 'openai', model: 'gpt-5.4-mini', apiKey: '' }]
+  })), /API key/i);
+});
+
+test('baseUrl is stored only for custom configs', async () => {
+  const calls = installChromeStorageMock();
+  await saveSettings(validSettings({
+    modelConfigs: [
+      customConfig({ baseUrl: ' http://localhost:11434/v1/ ' }),
+      { id: 'mc_2', name: 'GPT', provider: 'openai', model: 'gpt-5.4-mini', apiKey: 'k', baseUrl: 'http://stale/v1' }
+    ]
+  }));
+  const [custom, openai] = calls.local[0].modelConfigs;
+  assert.equal(custom.baseUrl, 'http://localhost:11434/v1');
+  assert.equal('baseUrl' in openai, false);
+});
+
+test('customOrigins dedupes and skips invalid', () => {
+  assert.deepEqual(customOrigins([
+    customConfig({ baseUrl: 'http://localhost:11434/v1' }),
+    customConfig({ id: 'mc_2', baseUrl: 'http://localhost:11434/v1/chat/completions' }),
+    customConfig({ id: 'mc_3', baseUrl: 'https://vllm.example.com/v1' }),
+    customConfig({ id: 'mc_4', baseUrl: 'http://api.example.com/v1' }),
+    customConfig({ id: 'mc_5', baseUrl: '' }),
+    { id: 'mc_6', provider: 'openai', baseUrl: 'https://other.example.com/v1' }
+  ]), ['http://localhost:11434/*', 'https://vllm.example.com/*']);
+  assert.deepEqual(customOrigins(undefined), []);
 });

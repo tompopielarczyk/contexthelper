@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
   extractAnthropicText, extractChatCompletionText, extractGeminiText,
-  createSSEParser, parseStreamEvent, getDefaultModel, callAI
+  createSSEParser, parseStreamEvent, getDefaultModel, callAI,
+  normalizeBaseUrl, isPrivateHost, getAvailableModels, fetchAvailableModels
 } from '../lib/api-client.js';
 import { isRetryableError } from '../lib/chat.js';
 
@@ -343,4 +344,87 @@ test('single assistant message keeps the Gemini model role', async (t) => {
     contents: [{ role: 'model', parts: [{ text: 'Draft' }] }],
     generationConfig: { maxOutputTokens: 4096, temperature: 0.3 }
   }));
+});
+
+// ── Custom OpenAI-compatible provider ──
+
+test('normalizeBaseUrl strips trailing slash and /chat/completions', () => {
+  assert.equal(normalizeBaseUrl(' http://localhost:11434/v1/ '), 'http://localhost:11434/v1');
+  assert.equal(normalizeBaseUrl('https://x.example.com/v1/chat/completions'), 'https://x.example.com/v1');
+});
+
+test('normalizeBaseUrl allows http only for local/private hosts', () => {
+  for (const ok of ['http://127.0.0.1:1234/v1', 'http://192.168.1.5/v1', 'http://10.0.0.2/v1', 'http://172.20.0.1/v1', 'http://nas.local/v1', 'http://[::1]:8080/v1', 'http://app.localhost/v1'])
+    assert.doesNotThrow(() => normalizeBaseUrl(ok), ok);
+  assert.throws(() => normalizeBaseUrl('http://api.example.com/v1'), /HTTPS/);
+  assert.throws(() => normalizeBaseUrl('http://172.32.0.1/v1'), /HTTPS/);
+  assert.throws(() => normalizeBaseUrl('ftp://localhost/v1'), /Invalid base URL/);
+  assert.throws(() => normalizeBaseUrl('not a url'), /Invalid base URL/);
+});
+
+test('normalizeBaseUrl rejects empty and non-string input', () => {
+  assert.throws(() => normalizeBaseUrl(''), /Invalid base URL/);
+  assert.throws(() => normalizeBaseUrl(undefined), /Invalid base URL/);
+});
+
+test('isPrivateHost covers loopback, mDNS and RFC 1918 ranges only', () => {
+  for (const h of ['localhost', 'app.localhost', 'nas.local', '127.0.0.1', '127.9.9.9', '[::1]', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.0.1'])
+    assert.equal(isPrivateHost(h), true, h);
+  for (const h of ['example.com', '172.15.0.1', '172.32.0.1', '192.169.0.1', '11.0.0.1', 'localhost.example.com', '8.8.8.8'])
+    assert.equal(isPrivateHost(h), false, h);
+});
+
+test('custom provider: no auth header without key, defaults', async (t) => {
+  const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: 'hi' } }] }), { status: 200 }));
+  const result = await callAI({ provider: 'custom', apiKey: '', model: 'llama3', baseUrl: 'http://localhost:11434/v1/', prompt: 'p' });
+  assert.equal(result, 'hi');
+  assert.equal(calls[0].url, 'http://localhost:11434/v1/chat/completions');
+  assert.equal('Authorization' in calls[0].options.headers, false);
+  assert.equal(calls[0].body.model, 'llama3');
+  assert.equal(calls[0].body.max_tokens, 4096);
+  assert.deepEqual(getAvailableModels('custom'), []);
+  assert.equal(getDefaultModel('custom'), '');
+});
+
+test('custom provider sends Bearer when a key is set', async (t) => {
+  const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: 'hi' } }] }), { status: 200 }));
+  await callAI({ provider: 'custom', apiKey: ' sk-x ', model: 'm', baseUrl: 'https://vllm.example.com/v1/chat/completions', prompt: 'p' });
+  assert.equal(calls[0].url, 'https://vllm.example.com/v1/chat/completions');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer sk-x');
+});
+
+test('custom provider streams chat-completions chunks ending in [DONE]', async (t) => {
+  stubFetch(t, () => streamResponse([chatDelta('he'), chatDelta('y'), 'data: [DONE]\n\n']));
+  const result = await callAI({ provider: 'custom', apiKey: '', model: 'm', baseUrl: 'http://localhost:1234/v1', prompt: 'p', onDelta: () => {} });
+  assert.equal(result, 'hey');
+});
+
+test('custom provider maps 403 to the OLLAMA_ORIGINS hint', async (t) => {
+  stubFetch(t, () => new Response('', { status: 403 }));
+  await assert.rejects(
+    callAI({ provider: 'custom', apiKey: '', model: 'm', baseUrl: 'http://localhost:11434/v1', prompt: 'p' }),
+    (err) => err.name === 'APIError' && err.status === 403 &&
+      err.message === 'Endpoint refused the request (403). For Ollama, set OLLAMA_ORIGINS=chrome-extension://* and restart it.'
+  );
+});
+
+test('custom provider names itself in errors and rejects a bad base URL before fetching', async (t) => {
+  const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: '' } }] }), { status: 200 }));
+  await assert.rejects(
+    callAI({ provider: 'custom', apiKey: '', model: 'm', baseUrl: 'http://localhost:11434/v1', prompt: 'p' }),
+    /Custom endpoint returned an empty response/
+  );
+  await assert.rejects(
+    callAI({ provider: 'custom', apiKey: '', model: 'm', baseUrl: 'http://api.example.com/v1', prompt: 'p' }),
+    /HTTPS/
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('fetchAvailableModels for custom reads data[].id from base/models', async (t) => {
+  const calls = stubFetch(t, () => new Response(JSON.stringify({ data: [{ id: 'llama3' }, { id: 'qwen2.5' }] }), { status: 200 }));
+  const models = await fetchAvailableModels('custom', '', undefined, 'http://localhost:11434/v1/');
+  assert.equal(calls[0].url, 'http://localhost:11434/v1/models');
+  assert.equal('Authorization' in calls[0].options.headers, false);
+  assert.deepEqual(models.map(m => m.id), ['llama3', 'qwen2.5']);
 });
