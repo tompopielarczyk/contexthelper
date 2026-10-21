@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ContextHelper",
   "version": "1.1.0",
-  "description": "AI-powered text actions via right-click context menu. Supports Anthropic, OpenAI, Google Gemini, OpenRouter, DeepL and local OpenAI-compatible models.",
+  "description": "AI actions on selected text. Supports Anthropic, OpenAI, Gemini, OpenRouter, DeepL and local OpenAI-compatible models.",
   "permissions": [
     "contextMenus",
     "storage",
