@@ -20,6 +20,9 @@ let _menuRebuildQueue = Promise.resolve();
 const _abortControllersByTab = new Map();
 
 const CHUNK_THROTTLE_MS = 100;
+// Every 20 s while a run is in flight: an extension API call resets the
+// worker's idle timer, and AI_HEARTBEAT tells the page the run is alive
+// (content.js gives up after LIVENESS_TIMEOUT_MS without one)
 const KEEPALIVE_INTERVAL_MS = 20_000;
 const SENSITIVE_FIELD_MESSAGE = 'ContextHelper does not send password or payment fields';
 const ACTION_MODEL_REMOVED_MESSAGE = "This action's model was removed — pick another in settings";
@@ -703,6 +706,15 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     });
     if (!canReportToTab || signal.aborted) return;
 
+    // From START on: keep the worker alive (extension API calls reset its
+    // idle timer) and tell the page the run is still going — reasoning
+    // models can think for minutes without a single chunk. Heartbeats go
+    // through the same ordered chain as every other message of the run.
+    keepalive = setInterval(() => {
+      chrome.runtime.getPlatformInfo().catch(() => {});
+      if (!signal.aborted) send({ type: 'AI_HEARTBEAT', requestId });
+    }, KEEPALIVE_INTERVAL_MS);
+
     const request = await buildRequest();
     if (signal.aborted) return;
 
@@ -719,12 +731,6 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
         send({ type: 'AI_CHUNK', requestId, offset: chunk.offset, delta: chunk.delta, tooltipSettings });
       }, CHUNK_THROTTLE_MS);
     }
-
-    // A long stream can outlive the idle limit of the service worker;
-    // extension API calls reset that timer
-    keepalive = setInterval(() => {
-      chrome.runtime.getPlatformInfo().catch(() => {});
-    }, KEEPALIVE_INTERVAL_MS);
 
     aiCallStarted = true;
     const result = await callAI({

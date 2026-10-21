@@ -23,7 +23,10 @@
   // resend on expiry — only tell the user. Module-level (not activeCleanups):
   // the first chunk's hideOverlay() must not clear them.
   const START_WATCHDOG_MS = 20_000; // requestRun → its AI_PROCESSING_START
-  const COMPLETION_WATCHDOG_MS = 300_000; // > the 240 s stream limit + margin
+  // The background sends AI_HEARTBEAT every 20 s (KEEPALIVE_INTERVAL_MS) for
+  // as long as a run is alive; 60 s of silence (no heartbeat, no chunk)
+  // means the worker died
+  const LIVENESS_TIMEOUT_MS = 60_000;
   let startWatchdog = null;
   let completionWatchdog = null;
 
@@ -101,6 +104,10 @@
         activeSelectionSnapshot = captureInsertionSnapshot();
         hideFloatingButton();
         showLoading(ts);
+        break;
+      case 'AI_HEARTBEAT':
+        if (activeRequestId === null || message.requestId !== activeRequestId) return;
+        armCompletionWatchdog(activeRequestId, ts); // the run is alive
         break;
       case 'AI_CHUNK':
         if (activeRequestId === null || message.requestId !== activeRequestId) return;
@@ -383,8 +390,10 @@
     completionWatchdog = null;
   }
 
-  // (Re)armed by START and every chunk of the active run; cleared by its
-  // result, error or cancellation. Expiry cancels the run in the background
+  // Liveness watchdog: (re)armed by START and by every heartbeat or chunk
+  // of the active run; cleared by its result, error or cancellation. There
+  // is no overall deadline — a long reasoning run stays alive while the
+  // background keeps beating. Expiry cancels the run in the background
   // (no more tokens spent if it is somehow still going), drops it here
   // (late messages for it are then ignored) and says so. Never resends.
   function armCompletionWatchdog(requestId, ts) {
@@ -396,7 +405,7 @@
       activeRequestId = null;
       activeSelectionSnapshot = null;
       showErrorTooltip('No response — the request may have been interrupted', ts);
-    }, COMPLETION_WATCHDOG_MS);
+    }, LIVENESS_TIMEOUT_MS);
   }
 
   function markClientIdDismissed(clientId) {
