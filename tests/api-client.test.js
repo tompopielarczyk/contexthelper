@@ -511,6 +511,26 @@ test('isPrivateHost covers loopback, mDNS and RFC 1918 ranges only', () => {
     assert.equal(isPrivateHost(h), false, h);
 });
 
+test('isPrivateHost accepts LAN and VPN hosts', () => {
+  for (const h of ['gpu-box', 'nas', 'box1', '100.64.0.0', '100.100.1.2', '100.127.255.255', '169.254.0.1', '169.254.255.255',
+    'ollama.internal', 'x.lan', 'printer.home.arpa', 'GPU-Box'])
+    assert.equal(isPrivateHost(h), true, h);
+});
+
+test('isPrivateHost rejects near misses, malformed and spoofed hosts', () => {
+  for (const h of ['100.63.255.255', '100.128.0.0', '100.128.0.1', '169.255.0.1', '169.253.255.255',
+    '300.1.1.1', '100.64.0.256', 'evil.lan.example.com', 'lan.example.com', 'x.internal.example.com', 'home.arpa.evil.com',
+    '', '-bad', 'bad-', 'a_b', 'a b', '.', 'x.', '300', '0x7f', '[fd00::1]', 'fe80::1', '[::]', null, undefined])
+    assert.equal(isPrivateHost(h), false, String(h));
+});
+
+test('normalizeBaseUrl accepts plain http for LAN and VPN hosts', () => {
+  assert.equal(normalizeBaseUrl('http://gpu-box:11434/v1'), 'http://gpu-box:11434/v1');
+  assert.equal(normalizeBaseUrl('http://100.101.102.103:1234/v1/'), 'http://100.101.102.103:1234/v1');
+  assert.equal(normalizeBaseUrl('http://llm.home.arpa/v1'), 'http://llm.home.arpa/v1');
+  assert.throws(() => normalizeBaseUrl('http://evil.lan.example.com/v1'), /HTTPS/);
+});
+
 test('custom provider: no auth header without key, defaults', async (t) => {
   const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: 'hi' } }] }), { status: 200 }));
   const result = await callAI({ provider: 'custom', apiKey: '', model: 'llama3', baseUrl: 'http://localhost:11434/v1/', prompt: 'p' });
