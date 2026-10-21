@@ -166,3 +166,8 @@ test('sanitizeClientId', () => {
 test('buildAskPrompt', () => {
   assert.equal(buildAskPrompt('  Why? ', 'abc'), 'Why?\n\nSelected text:\n"""\nabc\n"""');
 });
+
+test('buildAskPrompt inserts a multi-line selection verbatim', () => {
+  const text = 'line 1\n"""quoted"""\n  line 3 $& {{text}}';
+  assert.equal(buildAskPrompt('Q', text), `Q\n\nSelected text:\n"""\n${text}\n"""`);
+});

@@ -570,8 +570,11 @@
    * @param {object} ts  tooltipSettings
    */
   function showAskInput(selectionText, ts) {
-    // Store both before focusing the input: focus moves the page selection,
-    // and mouseup inside the overlay re-runs captureSelectionRect
+    // A keyboard selection (Shift+Arrow) never fires mouseup — refresh the
+    // rect from the live selection first. Then store both before focusing the
+    // input: focus moves the page selection, and mouseup inside the overlay
+    // re-runs captureSelectionRect
+    captureInitialSelection();
     const anchorRect = lastSelectionRect;
     const text = selectionText;
 
@@ -1732,7 +1735,6 @@
         border-radius: 6px;
         padding: 5px 8px;
         font: inherit;
-        font-size: 13px;
         color: inherit;
         background: transparent;
         outline: none;

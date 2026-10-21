@@ -525,6 +525,14 @@ async function showAskPrompt(tab, selectionText, settings) {
     await showTabNotice(tab.id, ASK_NEEDS_LLM_MESSAGE, settings);
     return;
   }
+  // A run still starting up (before its AI_PROCESSING_START) is unknown to
+  // the content script's cancel — abort it here, or its START would replace
+  // the input. runChat re-checks signal.aborted after every await.
+  const running = _abortControllersByTab.get(tab.id);
+  if (running) {
+    running.controller.abort();
+    _abortControllersByTab.delete(tab.id);
+  }
   if (!await ensureContentScript(tab.id)) return;
   await sendToTab(tab.id, {
     type: 'ASK_PROMPT',
