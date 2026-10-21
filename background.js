@@ -1,7 +1,11 @@
 import { getSettings, saveSettings, onSettingsChanged, isFirstRun, markInitialized, customOrigins } from './lib/storage.js';
 import { callAI } from './lib/api-client.js';
 import { sendWebhook, renderTemplate } from './lib/webhook.js';
-import { shouldStream, createThrottle, isRetryableError } from './lib/chat.js';
+import {
+  shouldStream, createThrottle, isRetryableError,
+  ASK_ACTION_ID, pickLLMConfig, sanitizeConversation, buildRefineMessages,
+  resolveRefineInstruction, sanitizeClientId
+} from './lib/chat.js';
 import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
@@ -30,7 +34,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleCancelAction(message, sender);
   }
   if (message?.type === 'RETRY_RUN') {
-    handleRetryRun(message.retry, sender);
+    handleRetryRun(message.retry, sender, sanitizeClientId(message.clientId));
+  }
+  if (message?.type === 'REFINE_ACTION') {
+    handleRefine(message, sender, sanitizeClientId(message.clientId));
   }
 });
 
@@ -275,7 +282,7 @@ async function handleRunAction({ actionId, selectionText, editable }, sender) {
 
 // Error tooltip outside the AI flow — content.js gates AI_ERROR on the
 // requestId set by AI_PROCESSING_START, so the notice needs the full pair.
-async function showTabNotice(tabId, message, settings) {
+async function showTabNotice(tabId, message, settings, clientId = null) {
   // The notice replaces whatever the tab shows — stop a run still in flight
   // there, or it keeps spending tokens for a result nobody will see
   const running = _abortControllersByTab.get(tabId);
@@ -288,6 +295,7 @@ async function showTabNotice(tabId, message, settings) {
   const ok = await sendToTab(tabId, {
     type: 'AI_PROCESSING_START',
     requestId,
+    clientId,
     tooltipSettings: settings.tooltipSettings
   });
   if (!ok) return;
@@ -309,30 +317,90 @@ function handleCancelAction({ requestId }, sender) {
 }
 
 // "↻ Retry" in the error tooltip — re-dispatch by the spec runChat attached
-// to AI_ERROR. Unknown kinds are ignored.
-async function handleRetryRun(retry, sender) {
+// to AI_ERROR. Unknown kinds get a notice. `clientId` is the page's id for
+// the spinner it already shows (see runChat).
+async function handleRetryRun(retry, sender, clientId = null) {
   const tab = sender?.tab;
-  if (!tab?.id || !retry || typeof retry !== 'object') return;
+  if (!tab?.id) return;
+  // The page already shows a spinner for this request (clientId) — every
+  // early exit must answer with a notice, or that spinner never clears
+  if (!retry || typeof retry !== 'object') {
+    await showTabNotice(tab.id, 'This request can no longer be retried', await getSettings(), clientId);
+    return;
+  }
 
   switch (retry.kind) {
     case 'action': {
-      if (typeof retry.selectionText !== 'string' || !retry.selectionText.trim()) return;
       const settings = await getSettings();
+      if (typeof retry.selectionText !== 'string' || !retry.selectionText.trim()) {
+        await showTabNotice(tab.id, 'Select some text first', settings, clientId);
+        return;
+      }
       const action = (settings.actions || []).find(a => a.id === retry.actionId);
       if (!action) {
-        await showTabNotice(tab.id, 'Action no longer exists', settings);
+        await showTabNotice(tab.id, 'Action no longer exists', settings, clientId);
         return;
       }
       await runAction(action, {
         selectionText: retry.selectionText,
         editable: !!retry.editable,
         pageVars: sanitizePageVars(retry.pageVars) // invalid → null → refetched
-      }, tab, settings);
+      }, tab, settings, clientId);
       return;
     }
+    case 'refine':
+      await handleRefine(retry, sender, clientId);
+      return;
     default:
+      await showTabNotice(tab.id, 'This request can no longer be retried', await getSettings(), clientId);
       return;
   }
+}
+
+// Refine bar in the result tooltip: a preset (Shorter / Longer / Simpler),
+// a free-text follow-up (`instruction`) or ↻ Retry (neither) on the
+// conversation the result came with. The conversation comes back from the
+// page, so it is re-validated here.
+async function handleRefine({ actionId, conversation, preset, instruction, sourceText }, sender, clientId = null) {
+  const tab = sender?.tab;
+  if (!tab?.id) return;
+
+  const settings = await getSettings();
+  const cleanConversation = sanitizeConversation(conversation);
+  const source = typeof sourceText === 'string' ? sourceText : '';
+  // Resolved up front so a retry of a failed refine sends the same text;
+  // a bad option still surfaces as AI_ERROR through buildRequest
+  let resolvedInstruction = null;
+  let optionError = null;
+  try {
+    resolvedInstruction = resolveRefineInstruction({ preset, instruction });
+  } catch (err) {
+    optionError = err;
+  }
+
+  await runChat(tab, settings, async () => {
+    if (optionError) throw optionError;
+    if (!cleanConversation) throw new Error('This result can no longer be refined');
+    const isAsk = actionId === ASK_ACTION_ID;
+    const action = isAsk ? null : (settings.actions || []).find(a => a.id === actionId);
+    if (!isAsk && !action) throw new Error('Action no longer exists');
+    const config = isAsk
+      ? pickLLMConfig(settings.modelConfigs)
+      : pickLLMConfig(settings.modelConfigs, action.modelConfigId);
+    if (!config) throw new Error('No LLM model configured');
+    if (config.provider === 'deepl') throw new Error('Refine is not available for DeepL');
+
+    return {
+      config,
+      messages: buildRefineMessages(cleanConversation, resolvedInstruction),
+      systemPrompt: settings.systemPrompt,
+      displayMode: 'tooltip',
+      editable: false,
+      meta: { actionId, actionName: action?.name || 'Ask', sourceText: source }
+    };
+  }, {
+    kind: 'refine', actionId, conversation: cleanConversation, instruction: resolvedInstruction, sourceText: source
+  }, clientId);
 }
 
 // Keep the registered content script in step with the opt-in list: the button
@@ -405,7 +473,7 @@ async function handleCommand(command, tab) {
 }
 
 // Shared AI flow for text actions — callers guarantee a non-empty selectionText
-function runAction(action, { selectionText, editable, pageVars = null }, tab, settings) {
+function runAction(action, { selectionText, editable, pageVars = null }, tab, settings, clientId = null) {
   const displayMode = action.displayMode || 'auto';
   // Filled with the page vars inside buildRequest, so a retry reuses the
   // context captured with the original selection instead of re-reading the page
@@ -443,7 +511,7 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
       editable,
       meta: { actionId: action.id, actionName: action.name, sourceText: selectionText }
     };
-  }, retrySpec);
+  }, retrySpec, clientId);
 }
 
 /**
@@ -457,8 +525,11 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
  *   throws → AI_ERROR without retry (config problems a retry cannot fix)
  * @param {object | null} retrySpec  attached to AI_ERROR when the AI call
  *   itself failed with a retryable error
+ * @param {string | null} clientId  id the page chose for a run it requested
+ *   (refine, retry); echoed in AI_PROCESSING_START so the page can drop a
+ *   run it dismissed before the START arrived
  */
-async function runChat(tab, settings, buildRequest, retrySpec = null) {
+async function runChat(tab, settings, buildRequest, retrySpec = null, clientId = null) {
   const previous = _abortControllersByTab.get(tab.id);
   if (previous) previous.controller.abort();
 
@@ -484,6 +555,7 @@ async function runChat(tab, settings, buildRequest, retrySpec = null) {
     canReportToTab = await sendToTab(tab.id, {
       type: 'AI_PROCESSING_START',
       requestId,
+      clientId,
       tooltipSettings
     });
     if (!canReportToTab || signal.aborted) return;
