@@ -81,9 +81,7 @@
         if (message.clientId && dismissedClientIds.has(message.clientId)) {
           // The user closed the early spinner — stop the run, show nothing
           dismissedClientIds.delete(message.clientId);
-          try {
-            chrome.runtime.sendMessage({ type: 'CANCEL_ACTION', requestId: message.requestId }).catch(() => {});
-          } catch { /* extension reloaded mid-session */ }
+          sendCancel(message.requestId);
           return;
         }
         // Another run took the screen before the pending request's START:
@@ -355,9 +353,7 @@
   function cancelActiveRun() {
     const requestId = activeRequestId;
     if (requestId !== null) {
-      try {
-        chrome.runtime.sendMessage({ type: 'CANCEL_ACTION', requestId }).catch(() => {});
-      } catch { /* extension reloaded mid-session */ }
+      sendCancel(requestId);
     } else if (pendingClientId !== null) {
       // START not here yet — remember the id so that START cancels the run
       markClientIdDismissed(pendingClientId);
@@ -368,6 +364,13 @@
     clearStartWatchdog();
     clearCompletionWatchdog();
     hideOverlay();
+  }
+
+  // Ask the background to abort a run (it ignores ids it no longer runs)
+  function sendCancel(requestId) {
+    try {
+      chrome.runtime.sendMessage({ type: 'CANCEL_ACTION', requestId }).catch(() => {});
+    } catch { /* extension reloaded mid-session */ }
   }
 
   function clearStartWatchdog() {
@@ -381,13 +384,15 @@
   }
 
   // (Re)armed by START and every chunk of the active run; cleared by its
-  // result, error or cancellation. Expiry drops the run (late messages for
-  // it are then ignored) and says so.
+  // result, error or cancellation. Expiry cancels the run in the background
+  // (no more tokens spent if it is somehow still going), drops it here
+  // (late messages for it are then ignored) and says so. Never resends.
   function armCompletionWatchdog(requestId, ts) {
     clearCompletionWatchdog();
     completionWatchdog = setTimeout(() => {
       completionWatchdog = null;
       if (activeRequestId !== requestId) return;
+      sendCancel(requestId);
       activeRequestId = null;
       activeSelectionSnapshot = null;
       showErrorTooltip('No response — the request may have been interrupted', ts);
