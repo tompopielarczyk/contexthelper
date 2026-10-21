@@ -766,12 +766,26 @@ async function getSelectionFromTab(tabId) {
       func: () => {
         const el = document.activeElement;
         const isTextControl = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
-        if (isTextControl && el.selectionStart != null && el.selectionEnd != null
-            && el.selectionEnd > el.selectionStart) {
-          return {
-            text: el.value.slice(el.selectionStart, el.selectionEnd),
-            editable: !el.readOnly && !el.disabled
-          };
+        if (isTextControl) {
+          // Never send a password or payment field to the provider (same rule as getPageContext)
+          const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
+          const sensitive = autocomplete.includes('password')
+            || autocomplete.split(/\s+/).some(token => token.startsWith('cc-'));
+          const textType = el.tagName === 'TEXTAREA'
+            || ['text', 'search', 'url', 'email', 'tel'].includes((el.type || '').toLowerCase());
+          if (sensitive || !textType) return { text: '', editable: false };
+          let start = null;
+          let end = null;
+          try {
+            start = el.selectionStart;
+            end = el.selectionEnd;
+          } catch { /* no text selection */ }
+          if (start != null && end != null && end > start) {
+            return {
+              text: el.value.slice(start, end),
+              editable: !el.readOnly && !el.disabled
+            };
+          }
         }
         const text = window.getSelection()?.toString() || '';
         return { text, editable: !!(el && el.isContentEditable) };
