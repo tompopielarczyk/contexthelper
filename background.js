@@ -1,14 +1,25 @@
-import { getSettings, saveSettings, onSettingsChanged, isFirstRun, markInitialized } from './lib/storage.js';
+import { getSettings, saveSettings, onSettingsChanged, isFirstRun, markInitialized, customOrigins } from './lib/storage.js';
 import { callAI } from './lib/api-client.js';
 import { sendWebhook, renderTemplate } from './lib/webhook.js';
+import {
+  shouldStream, createThrottle, isRetryableError,
+  ASK_ACTION_ID, pickLLMConfig, sanitizeConversation, buildRefineMessages,
+  resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError
+} from './lib/chat.js';
+import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
 const FLOATING_MENU_ID = 'contexthelper-floating-toggle';
+const ASK_MENU_ID = 'contexthelper-ask';
+const ASK_COMMAND = 'ask-selection';
 const FLOATING_SCRIPT_ID = 'contexthelper-floating';
 
-let _requestId = 0;
 let _menuRebuildQueue = Promise.resolve();
+// tabId → { controller, requestId } of the run currently owning that tab
 const _abortControllersByTab = new Map();
+
+const CHUNK_THROTTLE_MS = 100;
+const KEEPALIVE_INTERVAL_MS = 20_000;
 
 // Must register listeners synchronously — survives service worker restarts
 chrome.contextMenus.onClicked.addListener(handleMenuClick);
@@ -20,6 +31,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === 'RUN_ACTION') {
     handleRunAction(message, sender);
+  }
+  if (message?.type === 'CANCEL_ACTION') {
+    handleCancelAction(message, sender);
+  }
+  if (message?.type === 'RETRY_RUN') {
+    handleRetryRun(message.retry, sender, sanitizeClientId(message.clientId));
+  }
+  if (message?.type === 'REFINE_ACTION') {
+    handleRefine(message, sender, sanitizeClientId(message.clientId));
+  }
+  if (message?.type === 'RUN_ASK') {
+    handleRunAsk(message, sender, sanitizeClientId(message.clientId));
   }
 });
 
@@ -76,8 +99,8 @@ async function rebuildContextMenuNow() {
 
   // getSettings may write during migration, which fires onSettingsChanged and
   // queues another rebuild — read before creating anything
-  const { actions } = await getSettings();
-  if (!actions?.length) return;
+  // The parent and the Ask item exist even with zero actions
+  const actions = (await getSettings()).actions || [];
 
   const shortcutBySlot = await getShortcutsBySlot();
 
@@ -98,6 +121,13 @@ async function rebuildContextMenuNow() {
       contexts: ['selection']
     });
   }
+
+  await createMenuItem({
+    id: ASK_MENU_ID,
+    parentId: MENU_PARENT_ID,
+    title: 'Ask about selection…',
+    contexts: ['selection']
+  });
 
   await createMenuItem({
     id: `${FLOATING_MENU_ID}-separator`,
@@ -173,6 +203,12 @@ async function handleMenuClick(info, tab) {
     return;
   }
 
+  if (info.menuItemId === ASK_MENU_ID) {
+    if (!info.selectionText?.trim()) return;
+    await showAskPrompt(tab, info.selectionText, await getSettings());
+    return;
+  }
+
   const settings = await getSettings();
   const action = resolveActionByMenuId(settings.actions, info.menuItemId);
   if (!action) return;
@@ -223,7 +259,9 @@ async function handleFloatingToggle(info, tab) {
     // subtraction — same pitfall as the all-sites untoggle in options.js)
     const isApiHost = chrome.runtime.getManifest().host_permissions
       .some(pattern => pattern.includes(`//${host}/`));
-    if (!usedByWebhook && !isApiHost) {
+    // A custom model endpoint on this host still needs its grant
+    const usedByCustom = customOrigins(settings.modelConfigs).some(pattern => new URL(pattern).hostname === host);
+    if (!usedByWebhook && !isApiHost && !usedByCustom) {
       try { await chrome.permissions.remove({ origins: floatingOriginsForHost(host) }); } catch { /* keep the grant */ }
     }
     return;
@@ -262,12 +300,20 @@ async function handleRunAction({ actionId, selectionText, editable }, sender) {
 
 // Error tooltip outside the AI flow — content.js gates AI_ERROR on the
 // requestId set by AI_PROCESSING_START, so the notice needs the full pair.
-async function showTabNotice(tabId, message, settings) {
+async function showTabNotice(tabId, message, settings, clientId = null) {
+  // The notice replaces whatever the tab shows — stop a run still in flight
+  // there, or it keeps spending tokens for a result nobody will see
+  const running = _abortControllersByTab.get(tabId);
+  if (running) {
+    running.controller.abort();
+    _abortControllersByTab.delete(tabId);
+  }
   if (!await ensureContentScript(tabId)) return;
-  const requestId = ++_requestId;
+  const requestId = crypto.randomUUID();
   const ok = await sendToTab(tabId, {
     type: 'AI_PROCESSING_START',
     requestId,
+    clientId,
     tooltipSettings: settings.tooltipSettings
   });
   if (!ok) return;
@@ -275,8 +321,109 @@ async function showTabNotice(tabId, message, settings) {
     type: 'AI_ERROR',
     requestId,
     message,
+    retry: null,
+    partialText: '',
     tooltipSettings: settings.tooltipSettings
   });
+}
+
+// Dismissal of the spinner or the streaming tooltip. Only the run the
+// content script was showing is aborted — a newer run on the tab is not.
+function handleCancelAction({ requestId }, sender) {
+  const entry = _abortControllersByTab.get(sender?.tab?.id);
+  if (entry && requestId && entry.requestId === requestId) entry.controller.abort();
+}
+
+// "↻ Retry" in the error tooltip — re-dispatch by the spec runChat attached
+// to AI_ERROR. Unknown kinds get a notice. `clientId` is the page's id for
+// the spinner it already shows (see runChat).
+async function handleRetryRun(retry, sender, clientId = null) {
+  const tab = sender?.tab;
+  if (!tab?.id) return;
+  // The page already shows a spinner for this request (clientId) — every
+  // early exit must answer with a notice, or that spinner never clears
+  if (!retry || typeof retry !== 'object') {
+    await showTabNotice(tab.id, 'This request can no longer be retried', await getSettings(), clientId);
+    return;
+  }
+
+  switch (retry.kind) {
+    case 'action': {
+      const settings = await getSettings();
+      if (typeof retry.selectionText !== 'string' || !retry.selectionText.trim()) {
+        await showTabNotice(tab.id, 'Select some text first', settings, clientId);
+        return;
+      }
+      const action = (settings.actions || []).find(a => a.id === retry.actionId);
+      if (!action) {
+        await showTabNotice(tab.id, 'Action no longer exists', settings, clientId);
+        return;
+      }
+      await runAction(action, {
+        selectionText: retry.selectionText,
+        editable: !!retry.editable,
+        pageVars: sanitizePageVars(retry.pageVars) // invalid → null → refetched
+      }, tab, settings, clientId);
+      return;
+    }
+    case 'refine':
+      await handleRefine(retry, sender, clientId);
+      return;
+    case 'ask':
+      await handleRunAsk(retry, sender, clientId);
+      return;
+    default:
+      await showTabNotice(tab.id, 'This request can no longer be retried', await getSettings(), clientId);
+      return;
+  }
+}
+
+// Refine bar in the result tooltip: a preset (Shorter / Longer / Simpler),
+// a free-text follow-up (`instruction`) or ↻ Retry (neither) on the
+// conversation the result came with. The conversation comes back from the
+// page, so it is re-validated here.
+async function handleRefine({ actionId, conversation, preset, instruction, sourceText }, sender, clientId = null) {
+  const tab = sender?.tab;
+  if (!tab?.id) return;
+
+  const settings = await getSettings();
+  const cleanConversation = sanitizeConversation(conversation);
+  const source = typeof sourceText === 'string' ? sourceText : '';
+  // Resolved up front so a retry of a failed refine sends the same text;
+  // a bad option still surfaces as AI_ERROR through buildRequest
+  let resolvedInstruction = null;
+  let optionError = null;
+  try {
+    resolvedInstruction = resolveRefineInstruction({ preset, instruction });
+  } catch (err) {
+    optionError = err;
+  }
+
+  await runChat(tab, settings, async () => {
+    if (optionError) throw optionError;
+    if (!cleanConversation) throw new Error('This result can no longer be refined');
+    const isAsk = actionId === ASK_ACTION_ID;
+    const action = isAsk ? null : (settings.actions || []).find(a => a.id === actionId);
+    if (!isAsk && !action) throw new Error('Action no longer exists');
+    const config = isAsk
+      ? pickLLMConfig(settings.modelConfigs)
+      : pickLLMConfig(settings.modelConfigs, action.modelConfigId);
+    if (!config) throw new Error('No LLM model configured');
+    if (config.provider === 'deepl') throw new Error('Refine is not available for DeepL');
+    const keyError = missingApiKeyError(config);
+    if (keyError) throw new Error(keyError);
+
+    return {
+      config,
+      messages: buildRefineMessages(cleanConversation, resolvedInstruction),
+      systemPrompt: settings.systemPrompt,
+      displayMode: 'tooltip',
+      editable: false,
+      meta: { actionId, actionName: action?.name || 'Ask', sourceText: source }
+    };
+  }, {
+    kind: 'refine', actionId, conversation: cleanConversation, instruction: resolvedInstruction, sourceText: source
+  }, clientId);
 }
 
 // Keep the registered content script in step with the opt-in list: the button
@@ -324,6 +471,11 @@ async function syncFloatingButtonRegistration() {
 }
 
 async function handleCommand(command, tab) {
+  if (command === ASK_COMMAND) {
+    await handleAskCommand(tab);
+    return;
+  }
+
   const slot = COMMAND_SLOT_RE.exec(command)?.[1];
   if (!slot) return;
 
@@ -348,58 +500,220 @@ async function handleCommand(command, tab) {
   await runAction(action, { selectionText: selection.text, editable: selection.editable }, tab, settings);
 }
 
-// Shared AI flow — callers guarantee a non-empty selectionText
-async function runAction(action, { selectionText: selectedText, editable }, tab, settings) {
-  const requestId = ++_requestId;
-  const previousController = _abortControllersByTab.get(tab.id);
-  if (previousController) previousController.abort();
+async function handleAskCommand(tab) {
+  if (!tab?.id) {
+    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  }
+  if (!tab?.id) return;
 
-  const controller = new AbortController();
-  _abortControllersByTab.set(tab.id, controller);
-  const signal = controller.signal;
+  const settings = await getSettings();
+  const selection = await getSelectionFromTab(tab.id);
+  if (!selection) return; // restricted page
 
-  let canReportToTab = false;
+  if (!selection.text.trim()) {
+    await showTabNotice(tab.id, 'Select some text first', settings);
+    return;
+  }
 
-  try {
-    const contentReady = await ensureContentScript(tab.id);
-    if (!contentReady) return;
+  await showAskPrompt(tab, selection.text, settings);
+}
 
-    // Notify content script: show loading indicator before spending tokens.
-    canReportToTab = await sendToTab(tab.id, {
-      type: 'AI_PROCESSING_START',
-      requestId,
-      tooltipSettings: settings.tooltipSettings
-    });
-    if (!canReportToTab) return;
+const ASK_NEEDS_LLM_MESSAGE = 'Ask needs an LLM model — add one in the extension settings (DeepL cannot answer questions)';
 
+// Open the question input next to the selection (content.js answers with RUN_ASK)
+async function showAskPrompt(tab, selectionText, settings) {
+  if (!pickLLMConfig(settings.modelConfigs)) {
+    await showTabNotice(tab.id, ASK_NEEDS_LLM_MESSAGE, settings);
+    return;
+  }
+  // A run still starting up (before its AI_PROCESSING_START) is unknown to
+  // the content script's cancel — abort it here, or its START would replace
+  // the input. runChat re-checks signal.aborted after every await.
+  const running = _abortControllersByTab.get(tab.id);
+  if (running) {
+    running.controller.abort();
+    _abortControllersByTab.delete(tab.id);
+  }
+  if (!await ensureContentScript(tab.id)) return;
+  await sendToTab(tab.id, {
+    type: 'ASK_PROMPT',
+    selectionText,
+    tooltipSettings: settings.tooltipSettings
+  });
+}
+
+// Question submitted from the Ask input (or its retry). The page already
+// shows a spinner for `clientId` — every early exit answers with a notice,
+// or that spinner never clears.
+async function handleRunAsk({ question, selectionText }, sender, clientId = null) {
+  const tab = sender?.tab;
+  if (!tab?.id) return;
+
+  const settings = await getSettings();
+  if (typeof selectionText !== 'string' || !selectionText.trim()) {
+    await showTabNotice(tab.id, 'Select some text first', settings, clientId);
+    return;
+  }
+  if (typeof question !== 'string' || !question.trim()) {
+    await showTabNotice(tab.id, 'Type a question first', settings, clientId);
+    return;
+  }
+  if (!pickLLMConfig(settings.modelConfigs)) {
+    await showTabNotice(tab.id, ASK_NEEDS_LLM_MESSAGE, settings, clientId);
+    return;
+  }
+  await runAsk(question, selectionText, tab, settings, clientId);
+}
+
+// Free-form question about the selection — always a tooltip answer, first LLM config
+function runAsk(question, selectionText, tab, settings, clientId = null) {
+  return runChat(tab, settings, async () => {
+    const config = pickLLMConfig(settings.modelConfigs);
+    if (!config) throw new Error(ASK_NEEDS_LLM_MESSAGE);
+    const keyError = missingApiKeyError(config);
+    if (keyError) throw new Error(keyError);
+    const prompt = buildAskPrompt(question, selectionText);
+    return {
+      config,
+      messages: [{ role: 'user', content: prompt }],
+      prompt,
+      systemPrompt: settings.systemPrompt,
+      displayMode: 'tooltip',
+      editable: false,
+      meta: { actionId: ASK_ACTION_ID, actionName: 'Ask', sourceText: selectionText }
+    };
+  }, { kind: 'ask', question, selectionText }, clientId);
+}
+
+// Shared AI flow for text actions — callers guarantee a non-empty selectionText
+function runAction(action, { selectionText, editable, pageVars = null }, tab, settings, clientId = null) {
+  const displayMode = action.displayMode || 'auto';
+  // Filled with the page vars inside buildRequest, so a retry reuses the
+  // context captured with the original selection instead of re-reading the page
+  const retrySpec = { kind: 'action', actionId: action.id, selectionText, editable: !!editable };
+  return runChat(tab, settings, async () => {
     const config = resolveModelConfig(settings.modelConfigs, action.modelConfigId);
     if (!config) {
       throw new Error('No model configured. Please add a model in the extension settings.');
     }
-    if (!config.apiKey) {
-      throw new Error('Missing API key. Please configure the API key in settings.');
-    }
+    // Custom endpoints (Ollama, LM Studio) may run without a key
+    const keyError = missingApiKeyError(config);
+    if (keyError) throw new Error(keyError);
 
     // DeepL takes the raw selection (no prompt template, no system prompt)
     const isDeepL = config.provider === 'deepl';
     if (isDeepL && !action.targetLang) {
       throw new Error('No target language set for this action. Please configure it in settings.');
     }
-    const prompt = isDeepL ? selectedText : action.template.replaceAll('{{text}}', selectedText);
+    const pageContext = !isDeepL && templateUsesPageContext(action.template)
+      ? (pageVars || await getPageContext(tab))
+      : null;
+    if (pageContext) retrySpec.pageVars = pageContext;
+    const prompt = isDeepL
+      ? selectionText
+      : renderActionPrompt(action.template, { text: selectionText, ...pageContext });
 
+    return {
+      config,
+      messages: isDeepL ? null : [{ role: 'user', content: prompt }],
+      prompt,
+      systemPrompt: isDeepL ? undefined : settings.systemPrompt,
+      targetLang: action.targetLang,
+      displayMode,
+      editable,
+      meta: { actionId: action.id, actionName: action.name, sourceText: selectionText }
+    };
+  }, retrySpec, clientId);
+}
+
+/**
+ * Shared runner for every AI request shown in a tab: spinner, optional
+ * streaming into the tooltip, result or error. One run per tab — a new run
+ * aborts the previous one.
+ * @param {chrome.tabs.Tab} tab
+ * @param {object} settings  result of getSettings()
+ * @param {() => Promise<{ config, messages, prompt, systemPrompt, targetLang,
+ *   displayMode, editable, meta: { actionId, actionName, sourceText } }>} buildRequest
+ *   throws → AI_ERROR without retry (config problems a retry cannot fix)
+ * @param {object | null} retrySpec  attached to AI_ERROR when the AI call
+ *   itself failed with a retryable error
+ * @param {string | null} clientId  id the page chose for a run it requested
+ *   (refine, retry); echoed in AI_PROCESSING_START so the page can drop a
+ *   run it dismissed before the START arrived
+ */
+async function runChat(tab, settings, buildRequest, retrySpec = null, clientId = null) {
+  const previous = _abortControllersByTab.get(tab.id);
+  if (previous) previous.controller.abort();
+
+  // UUIDs, not a counter: the content script outlives a worker restart and
+  // must never match a stale id from the previous worker
+  const requestId = crypto.randomUUID();
+  const controller = new AbortController();
+  _abortControllersByTab.set(tab.id, { controller, requestId });
+  const signal = controller.signal;
+  const tooltipSettings = settings.tooltipSettings;
+
+  let canReportToTab = false;
+  let aiCallStarted = false;
+  let partialText = '';
+  let throttle = null;
+  let keepalive = null;
+
+  try {
+    const contentReady = await ensureContentScript(tab.id);
+    if (!contentReady || signal.aborted) return;
+
+    // Notify content script: show loading indicator before spending tokens.
+    canReportToTab = await sendToTab(tab.id, {
+      type: 'AI_PROCESSING_START',
+      requestId,
+      clientId,
+      tooltipSettings
+    });
+    if (!canReportToTab || signal.aborted) return;
+
+    const request = await buildRequest();
+    if (signal.aborted) return;
+
+    const { config, messages, prompt, systemPrompt, targetLang, displayMode, editable, meta } = request;
+    const isDeepL = config.provider === 'deepl';
+    const streaming = shouldStream({ provider: config.provider, displayMode, editable });
+    if (streaming) {
+      throttle = createThrottle(text => {
+        sendToTab(tab.id, { type: 'AI_CHUNK', requestId, text, tooltipSettings });
+      }, CHUNK_THROTTLE_MS);
+    }
+
+    // A long stream can outlive the idle limit of the service worker;
+    // extension API calls reset that timer
+    keepalive = setInterval(() => {
+      chrome.runtime.getPlatformInfo().catch(() => {});
+    }, KEEPALIVE_INTERVAL_MS);
+
+    aiCallStarted = true;
     const result = await callAI({
       provider: config.provider,
       apiKey: config.apiKey,
       model: config.model,
+      baseUrl: config.baseUrl,
       prompt,
-      systemPrompt: isDeepL ? undefined : settings.systemPrompt,
-      targetLang: action.targetLang,
-      signal
+      messages,
+      systemPrompt,
+      targetLang,
+      signal,
+      onDelta: streaming
+        ? (text) => {
+            partialText = text;
+            throttle.call(text);
+          }
+        : undefined
     });
 
     if (signal.aborted) return;
+    throttle?.flush();
+    throttle?.cancel();
 
-    const displayMode = action.displayMode || 'auto';
+    const conversationBase = messages?.length ? messages : [{ role: 'user', content: prompt }];
 
     await sendToTab(tab.id, {
       type: 'AI_RESULT',
@@ -407,30 +721,39 @@ async function runAction(action, { selectionText: selectedText, editable }, tab,
       text: result,
       editable,
       displayMode,
-      tooltipSettings: settings.tooltipSettings,
+      tooltipSettings,
+      actionId: meta.actionId,
+      sourceText: meta.sourceText,
+      // DeepL has no conversation to continue
+      conversation: isDeepL ? null : [...conversationBase, { role: 'assistant', content: result }],
       // Send-button data: names only for the menu, payload fields for SEND_WEBHOOK
       // (timestamp is stamped by the background at delivery time)
       webhooks: (settings.webhooks || []).map(w => ({ id: w.id, name: w.name })),
       webhookData: {
         result,
-        actionName: action.name,
-        sourceText: selectedText,
+        actionName: meta.actionName,
+        sourceText: meta.sourceText,
         pageUrl: tab?.url || '',
         pageTitle: tab?.title || '',
         modelUsed: isDeepL ? 'deepl' : (config.model || '')
       }
     });
   } catch (err) {
+    // Never flush here: a late chunk after AI_ERROR would re-open the stream view
+    throttle?.cancel();
     if (signal.aborted) return;
     if (!canReportToTab) return;
     await sendToTab(tab.id, {
       type: 'AI_ERROR',
       requestId,
-      message: err.message || 'An unknown error occurred',
-      tooltipSettings: settings.tooltipSettings
+      message: err?.message || 'An unknown error occurred',
+      partialText,
+      retry: aiCallStarted && isRetryableError(err) ? retrySpec : null,
+      tooltipSettings
     });
   } finally {
-    if (_abortControllersByTab.get(tab.id)?.signal === signal) {
+    clearInterval(keepalive);
+    if (_abortControllersByTab.get(tab.id)?.controller === controller) {
       _abortControllersByTab.delete(tab.id);
     }
   }
@@ -443,12 +766,26 @@ async function getSelectionFromTab(tabId) {
       func: () => {
         const el = document.activeElement;
         const isTextControl = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
-        if (isTextControl && el.selectionStart != null && el.selectionEnd != null
-            && el.selectionEnd > el.selectionStart) {
-          return {
-            text: el.value.slice(el.selectionStart, el.selectionEnd),
-            editable: !el.readOnly && !el.disabled
-          };
+        if (isTextControl) {
+          // Never send a password or payment field to the provider (same rule as getPageContext)
+          const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
+          const sensitive = autocomplete.includes('password')
+            || autocomplete.split(/\s+/).some(token => token.startsWith('cc-'));
+          const textType = el.tagName === 'TEXTAREA'
+            || ['text', 'search', 'url', 'email', 'tel'].includes((el.type || '').toLowerCase());
+          if (sensitive || !textType) return { text: '', editable: false };
+          let start = null;
+          let end = null;
+          try {
+            start = el.selectionStart;
+            end = el.selectionEnd;
+          } catch { /* no text selection */ }
+          if (start != null && end != null && end > start) {
+            return {
+              text: el.value.slice(start, end),
+              editable: !el.readOnly && !el.disabled
+            };
+          }
         }
         const text = window.getSelection()?.toString() || '';
         return { text, editable: !!(el && el.isContentEditable) };
@@ -458,6 +795,68 @@ async function getSelectionFromTab(tabId) {
   } catch {
     // Restricted page (chrome://, about:, etc.)
     return null;
+  }
+}
+
+/**
+ * Page context for {{context}} / {{pageTitle}} / {{pageUrl}}: the selection's
+ * surrounding block (windowed around the selection), plus title and URL.
+ * Restricted pages or a throw fall back to '' context and the tab's title/url.
+ */
+async function getPageContext(tab) {
+  const fallback = { context: '', pageTitle: tab.title || '', pageUrl: tab.url || '' };
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const title = document.title;
+        const url = location.href;
+        const el = document.activeElement;
+        const isTextControl = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
+        if (isTextControl) {
+          let start = null;
+          let end = null;
+          try {
+            // Throws on input types without a text selection (e.g. number)
+            start = el.selectionStart;
+            end = el.selectionEnd;
+          } catch { /* no text selection */ }
+          if (start != null && end != null && end > start) {
+            // Never send the whole value of a password or payment field
+            const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
+            const sensitive = autocomplete.includes('password')
+              || autocomplete.split(/\s+/).some(token => token.startsWith('cc-'));
+            const textType = el.tagName === 'TEXTAREA'
+              || ['text', 'search', 'url', 'email', 'tel'].includes((el.type || '').toLowerCase());
+            if (sensitive || !textType) return { blockText: '', start: 0, end: 0, title, url };
+            return { blockText: el.value, start, end, title, url };
+          }
+        }
+        const sel = window.getSelection();
+        const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+        if (!range || range.collapsed) return { blockText: '', start: 0, end: 0, title, url };
+
+        let node = range.commonAncestorContainer;
+        if (node.nodeType !== Node.ELEMENT_NODE) node = node.parentElement;
+        const block = (node && node.closest('p,li,td,th,blockquote,pre,dd,article,section,div'))
+          || document.body;
+        const pre = document.createRange();
+        pre.selectNodeContents(block);
+        pre.setEnd(range.startContainer, range.startOffset);
+        const start = pre.toString().length;
+        const end = start + range.toString().length;
+        return { blockText: block.textContent || '', start, end, title, url };
+      }
+    });
+    const r = results?.[0]?.result;
+    if (!r) return fallback;
+    return {
+      context: r.blockText ? windowAround(r.blockText, r.start, r.end) : '',
+      pageTitle: r.title || fallback.pageTitle,
+      pageUrl: r.url || fallback.pageUrl
+    };
+  } catch {
+    return fallback;
   }
 }
 

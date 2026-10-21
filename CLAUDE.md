@@ -19,42 +19,71 @@ background.js          # Service worker: context menu + AI calls
 content.js             # IIFE injected into every page: overlay UI
 options.html/js/css    # Settings page
 lib/
-  api-client.js        # Anthropic + OpenAI fetch wrappers, error mapping
+  api-client.js        # Provider fetch wrappers, streaming (SSE), error mapping
   storage.js           # chrome.storage abstraction, default actions/settings
+  chat.js              # Pure run helpers: streaming decision, LLM config pick, throttle, retry/refine/ask helpers
+  prompt.js            # Pure action-template rendering and page-context windowing
+  webhook.js           # Webhook delivery, payload templates, per-origin permissions
 ```
 
-Supported providers: Anthropic, OpenAI, Google Gemini, OpenRouter (includes open-source models). Each provider has its own `callXxx()` function in `api-client.js`. The model field is a free-text combobox (`<input>` + `<datalist>`) — any model ID can be typed directly (no "Other..." special case; see Model lists below).
+Supported providers: Anthropic, OpenAI, Google Gemini, OpenRouter (includes open-source models), DeepL, and `custom` (any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM). Each provider has its own `callXxx()` function in `api-client.js`; OpenAI, OpenRouter and custom share `callChatCompletions`. The model field is a free-text combobox (`<input>` + `<datalist>`) — any model ID can be typed directly (no "Other..." special case; see Model lists below).
 
 ### Data flow
 
 1. User selects text → right-clicks → picks action from "ContextHelper" submenu, **or** presses a keyboard shortcut (see Keyboard shortcuts below)
-2. `background.js` (`handleMenuClick` or `handleCommand`, both thin adapters over the shared `runAction`) reads settings, sends `AI_PROCESSING_START` to content script, calls `lib/api-client.js`
+2. `background.js` (`handleMenuClick` or `handleCommand`, both thin adapters over the shared `runAction`) builds a request and hands it to `runChat`, which sends `AI_PROCESSING_START` and calls `lib/api-client.js`
 3. Content script shows loading spinner (Shadow DOM overlay)
-4. Background receives AI response → sends `AI_RESULT` or `AI_ERROR` to content script
-5. Content script either replaces selected text or shows result tooltip
+4. For tooltip results the answer streams in (`AI_CHUNK`); the background then sends `AI_RESULT` or `AI_ERROR`
+5. Content script either replaces selected text or shows result tooltip (with the refine bar)
+
+### The `runChat` runner
+
+Every AI run (actions, refine, Ask, retries) goes through `runChat(tab, settings, buildRequest, retrySpec, clientId)` in `background.js`:
+- **Request ids** are `crypto.randomUUID()` (content-side comparisons survive a worker restart). `_abortControllersByTab` keeps one `{ controller, requestId }` per tab; a new run aborts the previous one, and so do `showTabNotice` and `ASK_PROMPT`.
+- `buildRequest()` runs **after** `AI_PROCESSING_START`, so its throws (missing model/key, deleted action, DeepL refine) surface as `AI_ERROR` through the requestId gating. `signal.aborted` is re-checked after every await.
+- **Streaming** only when `shouldStream({ provider, displayMode, editable })`: not DeepL, and the result goes to a tooltip (`tooltip`, or `auto` on a non-editable selection). Insert paths stay atomic behind the spinner. Chunks are the accumulated text, throttled to `CHUNK_THROTTLE_MS` (100 ms); the throttle is flushed before `AI_RESULT` and cancelled (never flushed) on error.
+- **Stream rules** (`readStream` in `api-client.js`): `idleMs` 30 s without bytes → "API stream stalled"; `totalMs` 240 s → "API response took too long"; EOF without a terminal event → "stream ended unexpectedly" (even after partial text). Terminal events: Anthropic `message_stop`, chat completions `finish_reason` or `data: [DONE]`, Gemini `finishReason`. Mid-stream provider errors (Anthropic `event: error`, OpenRouter HTTP-200 chunks with `error`) reject. `readStream` owns its own abort listener and idle/total timers, because for streaming calls `fetchWithErrorHandling` returns (and drops its listener) once headers arrive.
+- **Keepalive** — while a run is in flight, `chrome.runtime.getPlatformInfo()` every 20 s resets the worker's idle timer. Test streaming with DevTools closed (an open inspector keeps the worker alive and hides lifetime bugs).
+- **Retry** — `AI_ERROR` carries `partialText` and `retry` (a `RetrySpec`) only when `isRetryableError(err)`: `APIError` with status 0 (network, timeout, stall, stream error), 429 or ≥ 500. Config errors from `buildRequest` get `retry: null`. The error tooltip then shows `↻ Retry` (no 6 s auto-dismiss) and sends `RETRY_RUN`; `handleRetryRun` dispatches on `retry.kind`: `'action'` (`actionId`, `selectionText`, `editable`, `pageVars`), `'refine'`, `'ask'`. The Retry button's `mousedown` calls `preventDefault()` so an insert-mode retry can still replace the original selection.
+- **Early spinner (`clientId`)** — runs started from the page (refine, Ask, Retry) show the spinner immediately and carry a `clientId`; `runChat` and `showTabNotice` echo it in `AI_PROCESSING_START`. Dismissing the spinner before START records the id in `dismissedClientIds`, and a later START with that id is answered with `CANCEL_ACTION`. A START with a different id marks the pending one dismissed. Every background early return for such a request must answer through `showTabNotice(..., clientId)`, or the spinner never clears.
+- **API key check** — `missingApiKeyError(config)` in `lib/chat.js` is shared by actions, refine and Ask; `custom` configs may be keyless.
 
 ### Message protocol (background ↔ content script)
 
-Three message types flow via `chrome.tabs.sendMessage`:
-- `AI_PROCESSING_START` — carries `tooltipSettings`; content script shows spinner
-- `AI_RESULT` — carries `text`, `editable`, `displayMode`, `tooltipSettings`, plus `webhooks` (`[{id, name}]` — names only, no secrets) and `webhookData` (payload fields for a manual webhook send)
-- `AI_ERROR` — carries `message`, `tooltipSettings`
+Background → content (`chrome.tabs.sendMessage`):
+- `AI_PROCESSING_START` — `requestId`, `clientId?`, `tooltipSettings`; content script shows spinner
+- `AI_CHUNK` — `requestId`, `text` (accumulated), `tooltipSettings`; streaming tooltip (plain text, caret)
+- `AI_RESULT` — `text`, `editable`, `displayMode`, `tooltipSettings`, `actionId`, `sourceText`, `conversation` (`[...messages, assistant]`, `null` for DeepL), plus `webhooks` (`[{id, name}]` — names only, no secrets) and `webhookData` (payload fields for a manual webhook send)
+- `AI_ERROR` — `message`, `partialText`, `retry`, `tooltipSettings`
+- `ASK_PROMPT` — `selectionText`, `tooltipSettings`; content shows the Ask input
 
-Two message types flow the other way (content script → background, `chrome.runtime.sendMessage`):
+Content → background (`chrome.runtime.sendMessage`):
 - `SEND_WEBHOOK` — carries `webhookId` + `webhookData`; the background resolves the webhook from storage, renders its payload template, delivers it, and answers `{ok}` or `{ok: false, error}` via `sendResponse`
 - `RUN_ACTION` — carries `actionId` + `selectionText` + `editable` (sent by the floating selection button); the background resolves the action from settings and calls the shared `runAction`
+- `CANCEL_ACTION` — `requestId`; aborts the tab's run only if the id matches
+- `RETRY_RUN` — `retry`, `clientId`
+- `REFINE_ACTION` — `actionId`, `conversation`, `preset` or `instruction` (neither = Retry), `sourceText`, `clientId`
+- `RUN_ASK` — `question`, `selectionText`, `clientId`
 
 `sendToTab()` in `background.js` silently catches errors when the content script isn't loaded (restricted pages like `chrome://`).
+
+### Refine and Ask
+
+**Refine** — every LLM result tooltip (not DeepL, not explicit insert mode) has a refine bar: `Shorter`, `Longer`, `Simpler`, `↻ Retry` and a `Follow up…` input. Presets are sent as keys and resolved in the background via `REFINE_PRESETS` (`lib/chat.js`). The conversation travels with the tooltip (the worker may have restarted): `sanitizeConversation` requires user-first strict alternation ending in assistant, ≤ 100 000 chars per message, and trims to the first pair + last 18 (`MAX_CONVERSATION_MESSAGES` = 20). Config: `ASK_ACTION_ID` (`'__ask__'`) → `pickLLMConfig(configs)`; otherwise the action's config via `pickLLMConfig(configs, action.modelConfigId)`.
+
+**Ask** — "Ask about selection…" (context menu item `contexthelper-ask`, always present even with zero actions) and the `ask-selection` command (no suggested key). The background sends `ASK_PROMPT`; the content input captures the selection and anchor before focusing, stops key-event propagation, handles Esc locally and ignores Enter while `isComposing`. `RUN_ASK` builds `buildAskPrompt(question, text)` and runs on the first non-DeepL config.
+
+**Inputs in the closed shadow root** — focus retargets `document.activeElement` to the host; use held element references. `stopPropagation` keeps bubble-phase page shortcuts (GitHub, Gmail) out, but capture-phase `window` listeners still see the keys.
 
 ### Key architectural rules
 
 **Service worker listeners must be registered synchronously** — MV3 service workers can be terminated after ~5 min idle. Listeners registered inside `async` functions or after an `await` will be lost on revival. Always register `chrome.contextMenus.onClicked.addListener` and `chrome.commands.onCommand.addListener` at the top level.
 
-**Content script must remain IIFE** — MV3 content scripts do not support `type: "module"`. Only `background.js` and `options.js` use ES module `import/export`.
+**Content script must remain IIFE** — MV3 content scripts do not support `type: "module"`. Only `background.js` and `options.js` use ES module `import/export` (content.js cannot import `lib/` — keep shared logic message-driven, e.g. refine presets are resolved in the background).
 
 **Shadow DOM isolation** — all UI (tooltip, spinner) lives inside a closed Shadow DOM attached to a host `div`. This prevents host page styles from leaking in. `content.css` resets the host element (`all: initial !important`), while internal styles are injected via `getShadowStyles()` into the shadow root. Keep both in sync — `content.css` protects against host-page interference, `getShadowStyles()` defines the actual component styles.
 
-**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey }`), `webhooks` (array of `{ id, name, url, method, headers, template }`) — both contain secrets and are not synced to Google account — and `modelListCache` (per-provider live model lists, no secrets, just local-only cache). `chrome.storage.sync` holds `actions`, `tooltipSettings`, `floatingButtonSettings`, `systemPrompt`, `darkMode`. Actions reference model configs via `modelConfigId`; webhooks are a global list, not bound to actions (a legacy `webhookId` field on actions is stripped on read and write). The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
+**Storage split** — `chrome.storage.local` holds `modelConfigs` (array of `{ id, name, provider, model, apiKey, baseUrl? }` — `baseUrl` only for `custom`, stored normalized), `webhooks` (array of `{ id, name, url, method, headers, template }`) — both contain secrets and are not synced to Google account — and `modelListCache` (per-provider live model lists, keyed `custom:<baseUrl>` for custom endpoints; no secrets, local-only cache). `chrome.storage.sync` holds `actions`, `tooltipSettings`, `floatingButtonSettings`, `systemPrompt`, `darkMode`. Actions reference model configs via `modelConfigId`; webhooks are a global list, not bound to actions (a legacy `webhookId` field on actions is stripped on read and write). The 8KB per-item limit of sync storage means large data (e.g., many long action templates) should be moved to local.
 
 **Migration** — `getSettings()` auto-migrates two legacy schemas: (1) old single-provider data (separate `provider`, `model`, `apiKey` fields) into a `modelConfigs` array on first access — idempotent via `modelConfigs === null` check, creates one config from old fields, assigns it to all actions, cleans up old keys. (2) Legacy boolean `darkMode` is mapped to the tri-state form: `true` → `'dark'`, `false` → `'auto'`. New installs default to `'auto'`, which follows `prefers-color-scheme` via `matchMedia` (re-applied on system theme change while in `'auto'`).
 
@@ -73,7 +102,7 @@ The `localStorage` mirror is written only where the value is authoritative (afte
 ### Error handling pattern
 
 `lib/api-client.js` uses a layered approach:
-- `fetchWithErrorHandling()` — wraps `fetch` with AbortController timeout (90s) and maps network errors (AbortError → timeout, TypeError → no connection)
+- `fetchWithErrorHandling()` — wraps `fetch` with AbortController timeout (90s) and maps network errors (AbortError → timeout, TypeError → no connection). For non-streaming calls it also reads the JSON body (`readJSONUntilAbort`) while the external abort and the 90 s deadline still apply, so a server that sends headers and then stalls can be cancelled or times out; streaming calls pass `skipBody` and hand the body to `readStream`.
 - `safeParseJSON()` — catches non-JSON error bodies (e.g., 502 HTML pages) that would throw SyntaxError
 - `APIError` class — maps HTTP status codes to user-friendly messages (401 → invalid key, 429 → rate limit, 5xx → server unavailable)
 
@@ -114,7 +143,7 @@ A third trigger path besides the context menu and keyboard shortcuts: select tex
 
 **All-sites toggle** — the options card also offers `allSites`: enabling requests the broad `http://*/*` + `https://*/*` grant within the Save click gesture (denied → toggle reverts); disabling removes the broad grant and re-registers for the domain list only. Already-loaded tabs stop showing the button immediately via `storage.onChanged` in the content script, though the injected script itself lives until reload.
 
-**Permission-subtraction pitfall** — `chrome.permissions.remove` subtracts everything the removed pattern *contains* from the active permission set. Removing `https://*/*` therefore also strips the **required** API `host_permissions` from the manifest (all https), and every AI fetch starts failing CORS ("No internet connection" in the tooltip). The subtraction also strips the per-domain opt-in grants. Defenses in the code: (1) `onSave` in `options.js` re-requests the manifest `host_permissions` **plus** every listed domain (read from the rendered chips — a storage read would forfeit the gesture) inside the same click gesture on **every** save — one combined prompt at most, silent when everything is still granted — which both pairs with the untoggle removal and self-heals already-affected profiles; (2) per-domain removals (`removeFloatingDomain` in options, the context-menu toggle in background) skip `permissions.remove` when the host is covered by a manifest pattern; (3) `background.js` re-runs `syncFloatingButtonRegistration` on `chrome.permissions.onAdded/onRemoved`, because the re-grant can land after the `storage.onChanged` resync already filtered the domain out. Never remove a broad origin pattern without re-requesting the manifest hosts in the same gesture.
+**Permission-subtraction pitfall** — `chrome.permissions.remove` subtracts everything the removed pattern *contains* from the active permission set. Removing `https://*/*` therefore also strips the **required** API `host_permissions` from the manifest (all https), and every AI fetch starts failing CORS ("No internet connection" in the tooltip). The subtraction also strips the per-domain opt-in grants. Defenses in the code: (1) `onSave` in `options.js` re-requests the manifest `host_permissions` **plus** every listed domain, every webhook origin and every custom-endpoint origin (`buildRestoreOrigins` in `lib/webhook.js`; a refused re-request shows "some permissions could not be restored — click Save again") (read from the rendered chips — a storage read would forfeit the gesture) inside the same click gesture on **every** save — one combined prompt at most, silent when everything is still granted — which both pairs with the untoggle removal and self-heals already-affected profiles; (2) per-domain removals (`removeFloatingDomain` in options, the context-menu toggle in background) skip `permissions.remove` when the host is covered by a manifest pattern, used by a webhook, or used by a custom model endpoint; (3) `background.js` re-runs `syncFloatingButtonRegistration` on `chrome.permissions.onAdded/onRemoved`, because the re-grant can land after the `storage.onChanged` resync already filtered the domain out. Never remove a broad origin pattern without re-requesting the manifest hosts in the same gesture.
 
 **Appearance rules** (content.js) — button shows only for selections of ≥3 chars outside editable contexts (input/textarea/contenteditable); `selectionchange` + `mouseup` re-arm a `delayMs` timer, so it appears once the selection is stable. Hides on: deselect, outside mousedown, Esc, scroll, and `AI_PROCESSING_START`. The button element (`.cmn-float-btn`) deliberately lacks the `.cmn-overlay` class and has its own cleanup list (`floatingCleanups`) — `hideOverlay()` must not remove it, and vice versa. `floatingButtonSettings` (`{ delayMs, actionId, emoji, bgColor, domains, allSites }`, sync storage, sanitized in `lib/storage.js`) is read at injection and refreshed live via `storage.onChanged`. A non-default `bgColor` is applied inline (which also disables the CSS hover lightening); dark backgrounds get an auto-contrast light label/border.
 
@@ -134,6 +163,8 @@ A third trigger path besides the context menu and keyboard shortcuts: select tex
 6. Add `<option>` to provider `<select>` in `modelConfigTemplate` in `options.html`
 7. Add host permission in `manifest.json`
 
+**OpenAI-compatible endpoints need no new provider** — the `custom` provider covers them: user-supplied `baseUrl` (`normalizeBaseUrl` strips a trailing `/` or `/chat/completions`; plain `http` only for loopback and private-network hosts; IPv6 literals rejected because Chrome match patterns don't cover them), optional API key (`Authorization` only when set), models from `${base}/models`. Its origin is not in `host_permissions`: the options page requests it per origin (`customOrigins` in `lib/storage.js`) on Test and on Save. A 403 is remapped to an Ollama hint (`OLLAMA_ORIGINS=chrome-extension://*`).
+
 ### Model lists (live + fallback)
 
 The model combobox in options is fed from three layers, in order: the static fallback in `getAvailableModels()` (instant), the cached live list from `modelListCache` in `chrome.storage.local` (`getCachedModelList`/`setCachedModelList` in `lib/storage.js`, 24h TTL), and a background `fetchAvailableModels(provider, apiKey)` refetch when the cache is stale/missing — also re-triggered with a 600ms debounce after the API key changes (a new key may unlock the list). Fetch failures are silently swallowed; whatever list is showing stays. Per-provider notes: OpenAI's `/v1/models` is filtered to chat models (`OPENAI_CHAT_MODEL_RE`/`OPENAI_NON_CHAT_RE`); Gemini is filtered to `supportedGenerationMethods` containing `generateContent` and the `models/` prefix is stripped; OpenRouter's list is public (no key needed, ~300+ entries, hence the autocomplete combobox instead of a `<select>`); DeepL has none. `populateModelDatalist()` in `options.js` guards against out-of-order async updates with a per-datalist sequence counter. The model input re-validates against the datalist on every change, showing a non-blocking orange warning when the value is absent (retired model or typo). Static `DEFAULT_MODELS` rot over time — a prefill that is still auto-filled (never touched by the user, tracked via `modelAutoFilled`) and missing from a freshly loaded list is auto-replaced with the closest live ID (`closestModelId`: longest common prefix, ties broken by shared name tokens); saved/user-typed values are never rewritten, since retired models often keep working for existing keys.
@@ -150,4 +181,4 @@ DeepL is a translation API, not a chat LLM, so it deviates from the checklist ab
 
 ### Action template syntax
 
-Templates must contain `{{text}}` as the placeholder for selected text. `replaceAll('{{text}}', selectedText)` is used (not `replace`) — this matters if a template uses the placeholder more than once. Exception: actions backed by a DeepL config bypass the template entirely (validation requires `targetLang` instead).
+Templates must contain `{{text}}` as the placeholder for selected text. Optional page placeholders: `{{context}}` (the surrounding paragraph or text-control value, windowed to 2000 chars around the selection by `windowAround`), `{{pageTitle}}`, `{{pageUrl}}`. `renderActionPrompt` in `lib/prompt.js` replaces all of them in **one pass** with a function replacer, so selected text containing `{{context}}` or `$&` is inserted literally; unknown `{{x}}` tokens stay. `getPageContext` (injected via `chrome.scripting.executeScript`) runs only when `templateUsesPageContext(template)`, reads the top frame only, and never reads the value of password fields, `autocomplete` password / `cc-*` fields or input types outside text/search/url/email/tel. A retry reuses the first run's `pageVars`. Exception: actions backed by a DeepL config bypass the template entirely (validation requires `targetLang` instead).

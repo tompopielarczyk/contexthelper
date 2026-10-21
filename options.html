@@ -290,6 +290,7 @@
               <option value="google">Google (Gemini)</option>
               <option value="openrouter">OpenRouter</option>
               <option value="deepl">DeepL</option>
+              <option value="custom">Custom (OpenAI-compatible)</option>
             </select>
           </div>
           <div class="field">
@@ -300,8 +301,13 @@
             <span class="field-hint field-hint-warning model-config-model-warn" hidden></span>
           </div>
         </div>
+        <div class="field model-config-baseurl" hidden>
+          <label class="field-label">Base URL</label>
+          <input type="url" class="input model-config-baseurl-input" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false">
+          <span class="field-hint">Ollama: http://localhost:11434/v1, LM Studio: http://localhost:1234/v1. Ollama may need OLLAMA_ORIGINS=chrome-extension://*</span>
+        </div>
         <div class="field">
-          <label class="field-label">API Key</label>
+          <label class="field-label model-config-apikey-label">API Key</label>
           <div class="input-group">
             <input type="password" class="input input-key model-config-apikey" placeholder="sk-..." autocomplete="off">
             <button type="button" class="btn-icon model-config-toggle-key" title="Show/hide key">
@@ -398,7 +404,7 @@
         <textarea class="input action-template" placeholder="Template (use {{text}} as placeholder)" rows="3" data-field="template"></textarea>
         <select class="input input-select action-target-lang" data-field="targetLang" title="Translation target language" hidden></select>
         <div class="action-meta-row">
-          <span class="action-hint">Use <code>{{text}}</code> as placeholder for the selected text</span>
+          <span class="action-hint">Placeholders: <code>{{text}}</code> (required), <code>{{context}}</code> (surrounding paragraph), <code>{{pageTitle}}</code>, <code>{{pageUrl}}</code></span>
           <select class="input input-select action-model-config" data-field="modelConfigId" title="Model to use">
           </select>
           <select class="input input-select action-display-mode" data-field="displayMode" title="Result display mode">
