@@ -19,6 +19,13 @@
   // run then waits for AI_RESULT, which carries the full text)
   let streamShownLength = 0;
   let streamDesynced = false;
+  // Watchdogs, so a lost message can never leave a spinner up forever. Never
+  // resend on expiry — only tell the user. Module-level (not activeCleanups):
+  // the first chunk's hideOverlay() must not clear them.
+  const START_WATCHDOG_MS = 20_000; // requestRun → its AI_PROCESSING_START
+  const COMPLETION_WATCHDOG_MS = 300_000; // > the 240 s stream limit + margin
+  let startWatchdog = null;
+  let completionWatchdog = null;
 
   function isTextControl(el) {
     if (!el) return false;
@@ -86,7 +93,11 @@
           markClientIdDismissed(pendingClientId);
         }
         pendingClientId = null;
-        if (message.requestId !== undefined) activeRequestId = message.requestId;
+        clearStartWatchdog();
+        if (message.requestId !== undefined) {
+          activeRequestId = message.requestId;
+          armCompletionWatchdog(message.requestId, ts);
+        }
         streamShownLength = 0;
         streamDesynced = false;
         activeSelectionSnapshot = captureInsertionSnapshot();
@@ -95,6 +106,7 @@
         break;
       case 'AI_CHUNK':
         if (activeRequestId === null || message.requestId !== activeRequestId) return;
+        armCompletionWatchdog(activeRequestId, ts); // the run is alive
         if (streamDesynced || typeof message.delta !== 'string' || !message.delta) return;
         if (message.offset !== streamShownLength) {
           // A lost or reordered chunk (never expected: the background sends
@@ -108,6 +120,7 @@
       case 'AI_RESULT': {
         if (activeRequestId === null || message.requestId !== activeRequestId) return;
         activeRequestId = null; // run finished — later messages for it are stale
+        clearCompletionWatchdog();
         // Read before hideOverlay() removes the streaming tooltip, so the
         // result opens where the stream was
         const position = getStreamingPosition();
@@ -138,6 +151,7 @@
       case 'AI_ERROR': {
         if (activeRequestId === null || message.requestId !== activeRequestId) return;
         activeRequestId = null;
+        clearCompletionWatchdog();
         const position = getStreamingPosition();
         hideOverlay();
         showErrorTooltip(message.message, ts, {
@@ -351,7 +365,33 @@
     pendingClientId = null;
     activeRequestId = null;
     activeSelectionSnapshot = null;
+    clearStartWatchdog();
+    clearCompletionWatchdog();
     hideOverlay();
+  }
+
+  function clearStartWatchdog() {
+    clearTimeout(startWatchdog);
+    startWatchdog = null;
+  }
+
+  function clearCompletionWatchdog() {
+    clearTimeout(completionWatchdog);
+    completionWatchdog = null;
+  }
+
+  // (Re)armed by START and every chunk of the active run; cleared by its
+  // result, error or cancellation. Expiry drops the run (late messages for
+  // it are then ignored) and says so.
+  function armCompletionWatchdog(requestId, ts) {
+    clearCompletionWatchdog();
+    completionWatchdog = setTimeout(() => {
+      completionWatchdog = null;
+      if (activeRequestId !== requestId) return;
+      activeRequestId = null;
+      activeSelectionSnapshot = null;
+      showErrorTooltip('No response — the request may have been interrupted', ts);
+    }, COMPLETION_WATCHDOG_MS);
   }
 
   function markClientIdDismissed(clientId) {
@@ -551,9 +591,21 @@
     const clientId = newClientId();
     showLoading(ts);
     pendingClientId = clientId;
+    // Every background path must answer with START; if none comes, the
+    // request was lost — show an error instead of spinning forever, and
+    // mark the id dismissed so a very late START only cancels the run
+    clearStartWatchdog(); // a previous request was superseded
+    startWatchdog = setTimeout(() => {
+      startWatchdog = null;
+      if (pendingClientId !== clientId) return; // dismissed or superseded
+      pendingClientId = null;
+      markClientIdDismissed(clientId);
+      showErrorTooltip('The request did not start — try again', ts);
+    }, START_WATCHDOG_MS);
     const fail = () => {
       if (pendingClientId !== clientId) return; // dismissed or superseded
       pendingClientId = null;
+      clearStartWatchdog();
       showErrorTooltip('Extension unavailable — try reloading the page', ts);
     };
     try {
