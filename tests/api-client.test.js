@@ -162,9 +162,141 @@ test('done with empty text rejects with the empty-response message', async (t) =
 test('idle stall rejects', async (t) => {
   stubFetch(t, () => streamResponse([], { hang: true }));
   await assert.rejects(
-    callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {}, streamTimeouts: { idleMs: 20, totalMs: 1000 } }),
+    callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {}, streamTimeouts: { preAnswerIdleMs: 20, idleMs: 20, totalMs: 1000 } }),
     /stalled/
   );
+});
+
+// Body that enqueues each step after its delay (ms from the previous step),
+// then hangs or closes
+function timedStreamResponse(steps, { hang = false } = {}) {
+  const timers = [];
+  const body = new ReadableStream({
+    start(controller) {
+      let at = 0;
+      for (const [delay, chunk] of steps) {
+        at += delay;
+        timers.push(setTimeout(() => controller.enqueue(encoder.encode(chunk)), at));
+      }
+      if (!hang) timers.push(setTimeout(() => controller.close(), at + 1));
+    },
+    cancel() { timers.forEach(clearTimeout); }
+  });
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+test('a silent wait longer than idleMs before the first answer text resolves', async (t) => {
+  // Reasoning models think for a while after the role chunk
+  stubFetch(t, () => timedStreamResponse([
+    [0, sse({ choices: [{ delta: { role: 'assistant' }, finish_reason: null }] })],
+    [80, chatDelta('Hi')],
+    [5, sse({ choices: [{ delta: {}, finish_reason: 'stop' }] })]
+  ]));
+  const result = await callAI({
+    provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+    streamTimeouts: { preAnswerIdleMs: 500, idleMs: 30, totalMs: 2000 }
+  });
+  assert.equal(result, 'Hi');
+});
+
+test('keep-alive bytes reset the pre-answer inactivity limit', async (t) => {
+  stubFetch(t, () => timedStreamResponse([
+    [0, ': ping\n\n'], [40, ': ping\n\n'], [40, ': ping\n\n'], [40, ': ping\n\n'],
+    [40, anthropicDelta('ok')],
+    [5, sse({ type: 'message_stop' }, 'message_stop')]
+  ]));
+  const result = await callAI({
+    provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+    streamTimeouts: { preAnswerIdleMs: 80, idleMs: 10, totalMs: 2000 }
+  });
+  assert.equal(result, 'ok');
+});
+
+test('no bytes before preAnswerIdleMs rejects as stalled', async (t) => {
+  stubFetch(t, () => timedStreamResponse([
+    [0, sse({ choices: [{ delta: { role: 'assistant' }, finish_reason: null }] })]
+  ], { hang: true }));
+  await assert.rejects(
+    callAI({
+      provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+      streamTimeouts: { preAnswerIdleMs: 40, idleMs: 1000, totalMs: 2000 }
+    }),
+    /stalled/
+  );
+});
+
+test('a pause longer than idleMs after the first answer text rejects', async (t) => {
+  stubFetch(t, () => timedStreamResponse([
+    [0, chatDelta('Hel')],
+    [100, chatDelta('lo')]
+  ], { hang: true }));
+  await assert.rejects(
+    callAI({
+      provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+      streamTimeouts: { preAnswerIdleMs: 1000, idleMs: 30, totalMs: 2000 }
+    }),
+    /stalled/
+  );
+});
+
+test('the total limit also bounds the pre-answer phase', async (t) => {
+  stubFetch(t, () => {
+    let timer;
+    const body = new ReadableStream({
+      start(controller) {
+        timer = setInterval(() => controller.enqueue(encoder.encode(': ping\n\n')), 5);
+      },
+      cancel() { clearInterval(timer); }
+    });
+    return new Response(body, { status: 200 });
+  });
+  await assert.rejects(
+    callAI({
+      provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {},
+      streamTimeouts: { preAnswerIdleMs: 1000, idleMs: 1000, totalMs: 40 }
+    }),
+    /took too long/
+  );
+});
+
+test('anthropic thinking, signature and ping events are not answer text', async (t) => {
+  for (const delta of [{ type: 'thinking_delta', thinking: 'hmm' }, { type: 'signature_delta', signature: 'sig' }]) {
+    assert.deepEqual(parseStreamEvent('anthropic', { type: 'content_block_delta', delta }), { delta: '', done: false, error: null });
+  }
+  stubFetch(t, () => streamResponse([
+    sse({ type: 'ping' }, 'ping'),
+    sse({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'secret' } }, 'content_block_delta'),
+    sse({ type: 'content_block_delta', delta: { type: 'signature_delta', signature: 'sig' } }, 'content_block_delta'),
+    anthropicDelta('Answer'),
+    sse({ type: 'message_stop' }, 'message_stop')
+  ]));
+  const deltas = [];
+  const result = await callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: d => deltas.push(d) });
+  assert.equal(result, 'Answer');
+  assert.deepEqual(deltas, ['Answer']);
+});
+
+test('gemini thought parts are not answer text', async (t) => {
+  assert.equal(
+    parseStreamEvent('google', { candidates: [{ content: { parts: [{ text: 'thinking…', thought: true }, { text: 'Answer' }] } }] }).delta,
+    'Answer'
+  );
+  assert.equal(
+    extractGeminiText({ candidates: [{ content: { parts: [{ text: 'plan', thought: true }, { text: 'Final' }] } }] }),
+    'Final'
+  );
+  assert.throws(
+    () => extractGeminiText({ candidates: [{ content: { parts: [{ text: 'only thoughts', thought: true }] }, finishReason: 'MAX_TOKENS' }] }),
+    /empty response \(MAX_TOKENS\)/
+  );
+  stubFetch(t, () => streamResponse([
+    sse({ candidates: [{ content: { parts: [{ text: 'reasoning', thought: true }] } }] }),
+    sse({ candidates: [{ content: { parts: [{ text: 'Done' }] }, finishReason: 'STOP' }] })
+  ]));
+  const deltas = [];
+  const result = await callAI({ provider: 'google', apiKey: 'k', model: 'm', prompt: 'p', onDelta: d => deltas.push(d) });
+  assert.equal(result, 'Done');
+  assert.deepEqual(deltas, ['Done']);
 });
 
 test('total timeout rejects even while bytes keep arriving', async (t) => {
