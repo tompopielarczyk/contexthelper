@@ -9,6 +9,11 @@
   let activeCleanups = [];
   let activeRequestId = null; // id of the run whose UI is showing; null = none
   let activeSelectionSnapshot = null;
+  // Runs the page requested itself (refine, retry) show the spinner before
+  // the background's AI_PROCESSING_START; the clientId ties the two together
+  let pendingClientId = null; // clientId of the spinner shown ahead of START
+  const dismissedClientIds = new Set(); // dismissed before START arrived
+  const MAX_DISMISSED_CLIENT_IDS = 20;
 
   function isTextControl(el) {
     if (!el) return false;
@@ -61,6 +66,15 @@
 
     switch (message.type) {
       case 'AI_PROCESSING_START':
+        if (message.clientId && dismissedClientIds.has(message.clientId)) {
+          // The user closed the early spinner — stop the run, show nothing
+          dismissedClientIds.delete(message.clientId);
+          try {
+            chrome.runtime.sendMessage({ type: 'CANCEL_ACTION', requestId: message.requestId }).catch(() => {});
+          } catch { /* extension reloaded mid-session */ }
+          return;
+        }
+        pendingClientId = null;
         if (message.requestId !== undefined) activeRequestId = message.requestId;
         activeSelectionSnapshot = captureInsertionSnapshot();
         hideFloatingButton();
@@ -83,7 +97,8 @@
             ? { webhooks: message.webhooks, webhookData: message.webhookData }
             : null,
           position,
-          refine: message.conversation
+          // Not for an insert-mode fallback: refining there is not offered
+          refine: message.conversation && mode !== 'insert'
             ? { actionId: message.actionId, conversation: message.conversation, sourceText: message.sourceText }
             : null
         };
@@ -299,7 +314,14 @@
       try {
         chrome.runtime.sendMessage({ type: 'CANCEL_ACTION', requestId }).catch(() => {});
       } catch { /* extension reloaded mid-session */ }
+    } else if (pendingClientId !== null) {
+      // START not here yet — remember the id so that START cancels the run
+      dismissedClientIds.add(pendingClientId);
+      if (dismissedClientIds.size > MAX_DISMISSED_CLIENT_IDS) {
+        dismissedClientIds.delete(dismissedClientIds.values().next().value);
+      }
     }
+    pendingClientId = null;
     activeRequestId = null;
     activeSelectionSnapshot = null;
     hideOverlay();
@@ -435,7 +457,7 @@
 
     el.appendChild(closeBtn);
     el.appendChild(content);
-    if (refine) el.appendChild(createRefineBar(refine));
+    if (refine) el.appendChild(createRefineBar(refine, ts));
     el.appendChild(actions);
     appendAndClampOverlay(el, pos);
     observeTooltipResize(el);
@@ -444,50 +466,61 @@
     addOutsideClickHandler(hideOverlay);
   }
 
-  // Copy of REFINE_PRESETS in lib/chat.js (a content script cannot import) —
-  // keep the two in sync
-  const REFINE_PRESETS = {
-    shorter: 'Make it shorter. Return only the revised text.',
-    longer: 'Expand it with more detail. Return only the revised text.',
-    simpler: 'Rewrite it in simpler language. Return only the revised text.'
-  };
+  // Ask the background for a run the page itself started (refine, retry):
+  // the spinner shows at once, and the clientId lets a dismissal that lands
+  // before AI_PROCESSING_START still stop the run (see cancelActiveRun).
+  function requestRun(message, ts) {
+    const clientId = newClientId();
+    showLoading(ts);
+    pendingClientId = clientId;
+    const fail = () => {
+      if (pendingClientId !== clientId) return; // dismissed or superseded
+      pendingClientId = null;
+      showErrorTooltip('Extension unavailable — try reloading the page', ts);
+    };
+    try {
+      chrome.runtime.sendMessage({ ...message, clientId }).catch(fail);
+    } catch {
+      fail(); // extension reloaded mid-session
+    }
+  }
 
-  // Refine bar under the result: presets, ↻ Retry and a follow-up input.
-  // Each sends REFINE_ACTION; the background answers with a new run
-  // (spinner → result), so the bar only disables itself while that starts.
-  function createRefineBar({ actionId, conversation, sourceText }) {
+  function newClientId() {
+    // randomUUID needs a secure context — plain http pages fall back
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Refine bar under the result: presets and ↻ Retry on one row, the
+  // follow-up input below. Each sends REFINE_ACTION through requestRun;
+  // presets are resolved by key in the background (REFINE_PRESETS in
+  // lib/chat.js), Retry sends neither a preset nor an instruction.
+  function createRefineBar({ actionId, conversation, sourceText }, ts) {
     const bar = document.createElement('div');
     bar.className = 'cmn-refine';
-    const controls = [];
+    const buttons = document.createElement('div');
+    buttons.className = 'cmn-refine-presets';
 
-    function submit(instruction) {
-      for (const c of controls) c.disabled = true;
-      const enable = () => { for (const c of controls) c.disabled = false; };
-      try {
-        chrome.runtime.sendMessage({
-          type: 'REFINE_ACTION', actionId, conversation, instruction, sourceText
-        }).catch(enable);
-      } catch {
-        enable(); // extension reloaded mid-session
-      }
-    }
+    const submit = (extra) => requestRun({
+      type: 'REFINE_ACTION', actionId, conversation, sourceText, ...extra
+    }, ts);
 
-    for (const [label, key] of [['Shorter', 'shorter'], ['Longer', 'longer'], ['Simpler', 'simpler']]) {
+    for (const [label, preset] of [['Shorter', 'shorter'], ['Longer', 'longer'], ['Simpler', 'simpler']]) {
       const btn = document.createElement('button');
       btn.className = 'cmn-btn cmn-btn-send cmn-refine-btn';
       btn.textContent = label;
-      btn.addEventListener('click', () => submit(REFINE_PRESETS[key]));
-      controls.push(btn);
-      bar.appendChild(btn);
+      btn.title = label;
+      btn.addEventListener('click', () => submit({ preset }));
+      buttons.appendChild(btn);
     }
 
     const retryBtn = document.createElement('button');
     retryBtn.className = 'cmn-btn cmn-btn-send cmn-refine-btn';
     retryBtn.textContent = '↻ Retry';
     retryBtn.title = 'Generate the answer again';
-    retryBtn.addEventListener('click', () => submit(null));
-    controls.push(retryBtn);
-    bar.appendChild(retryBtn);
+    retryBtn.addEventListener('click', () => submit({}));
+    buttons.appendChild(retryBtn);
+    bar.appendChild(buttons);
 
     const input = document.createElement('input');
     input.type = 'text';
@@ -502,12 +535,11 @@
       } else if (e.key === 'Enter' && !e.isComposing) {
         e.preventDefault();
         const value = input.value.trim();
-        if (value) submit(value);
+        if (value) submit({ instruction: value });
       }
     });
     input.addEventListener('keyup', (e) => e.stopPropagation());
     input.addEventListener('keypress', (e) => e.stopPropagation());
-    controls.push(input);
     bar.appendChild(input);
 
     return bar;
@@ -579,12 +611,7 @@
         // Keep page focus and selection, so an insert-mode retry can still
         // replace the original text
         retryBtn.addEventListener('mousedown', (e) => e.preventDefault());
-        retryBtn.addEventListener('click', () => {
-          hideOverlay();
-          try {
-            chrome.runtime.sendMessage({ type: 'RETRY_RUN', retry }).catch(() => {});
-          } catch { /* extension reloaded mid-session */ }
-        });
+        retryBtn.addEventListener('click', () => requestRun({ type: 'RETRY_RUN', retry }, ts));
         actions.appendChild(retryBtn);
       }
 
@@ -1467,11 +1494,12 @@
         display: none;
       }
 
-      /* Refine bar: presets, Retry and the follow-up input under the result */
+      /* Refine bar under the result: a row of presets + Retry, then the
+         follow-up input. Fixed height (buttons shrink with an ellipsis
+         instead of wrapping), so only .cmn-content shrinks and scrolls. */
       .cmn-refine {
         display: flex;
-        flex-wrap: wrap;
-        align-items: center;
+        flex-direction: column;
         gap: 6px;
         flex-shrink: 0;
         margin-bottom: 8px;
@@ -1482,13 +1510,28 @@
         display: none;
       }
 
+      .cmn-refine-presets {
+        display: flex;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .cmn-refine-presets[hidden] {
+        display: none;
+      }
+
       .cmn-refine-btn {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
         padding: 3px 9px;
         font-size: 12px;
       }
 
       .cmn-refine-input {
-        flex: 1 1 120px;
+        width: 100%;
         min-width: 0;
         box-sizing: border-box;
         padding: 4px 8px;
@@ -1510,10 +1553,10 @@
         opacity: 0.55;
       }
 
-      .cmn-refine-btn:disabled,
-      .cmn-refine-input:disabled {
-        cursor: default;
-        opacity: 0.6;
+      /* Content keeps a few lines even at the smallest stored size
+         (min-height beats the inline max-height from tooltipBox) */
+      .cmn-resizable:has(.cmn-refine) {
+        min-height: 170px;
       }
 
       .cmn-send-item {

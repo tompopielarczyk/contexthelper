@@ -132,3 +132,33 @@ test('REFINE_PRESETS and MAX_CONVERSATION_MESSAGES', () => {
     simpler: 'Rewrite it in simpler language. Return only the revised text.'
   });
 });
+
+// --- Task 4 review fixes ----------------------------------------------------
+import { resolveRefineInstruction, sanitizeClientId } from '../lib/chat.js';
+
+test('sanitizeConversation keeps exactly 20 messages untrimmed', () => {
+  const twenty = Array.from({ length: 20 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: String(i) }));
+  assert.deepEqual(sanitizeConversation(twenty), twenty);
+});
+test('resolveRefineInstruction maps presets, follow-ups and retry', () => {
+  assert.equal(resolveRefineInstruction({ preset: 'shorter' }), REFINE_PRESETS.shorter);
+  assert.equal(resolveRefineInstruction({ preset: 'longer' }), REFINE_PRESETS.longer);
+  assert.equal(resolveRefineInstruction({ preset: 'simpler' }), REFINE_PRESETS.simpler);
+  assert.equal(resolveRefineInstruction({ instruction: '  Make it formal ' }), 'Make it formal');
+  assert.equal(resolveRefineInstruction({}), null);
+  assert.equal(resolveRefineInstruction({ instruction: null }), null);
+});
+test('resolveRefineInstruction rejects unknown presets and bad instructions', () => {
+  for (const bad of [{ preset: 'toString' }, { preset: 'louder' }, { preset: 1 },
+    { instruction: '   ' }, { instruction: 5 }]) {
+    assert.throws(() => resolveRefineInstruction(bad), { message: 'Unknown refine option' });
+  }
+});
+test('sanitizeClientId', () => {
+  assert.equal(sanitizeClientId('abc-123'), 'abc-123');
+  assert.equal(sanitizeClientId('x'.repeat(64)), 'x'.repeat(64));
+  assert.equal(sanitizeClientId('x'.repeat(65)), null);
+  assert.equal(sanitizeClientId(''), null);
+  assert.equal(sanitizeClientId(42), null);
+  assert.equal(sanitizeClientId(undefined), null);
+});
