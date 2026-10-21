@@ -565,7 +565,7 @@
 
   /**
    * Single-line question input for "Ask about selection…". Submitting sends
-   * RUN_ASK; the answer comes back through the normal AI_* messages.
+   * RUN_ASK through requestRun; the answer comes back through the normal AI_* messages.
    * @param {string} selectionText
    * @param {object} ts  tooltipSettings
    */
@@ -604,10 +604,8 @@
       }
       // The spinner and the answer open at the selection, not at the input
       lastSelectionRect = anchorRect;
-      hideOverlay();
-      try {
-        chrome.runtime.sendMessage({ type: 'RUN_ASK', question, selectionText: text }).catch(() => {});
-      } catch { /* extension reloaded mid-session */ }
+      // Early spinner + clientId, like refine/retry (requestRun hides the input)
+      requestRun({ type: 'RUN_ASK', question, selectionText: text }, ts);
     };
 
     // Keys typed here must not reach page shortcuts (closed shadow root:

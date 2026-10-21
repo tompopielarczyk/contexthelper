@@ -4,7 +4,7 @@ import { sendWebhook, renderTemplate } from './lib/webhook.js';
 import {
   shouldStream, createThrottle, isRetryableError,
   ASK_ACTION_ID, pickLLMConfig, sanitizeConversation, buildRefineMessages,
-  resolveRefineInstruction, sanitizeClientId, buildAskPrompt
+  resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError
 } from './lib/chat.js';
 import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
 
@@ -42,7 +42,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleRefine(message, sender, sanitizeClientId(message.clientId));
   }
   if (message?.type === 'RUN_ASK') {
-    handleRunAsk(message, sender);
+    handleRunAsk(message, sender, sanitizeClientId(message.clientId));
   }
 });
 
@@ -369,10 +369,9 @@ async function handleRetryRun(retry, sender, clientId = null) {
     case 'refine':
       await handleRefine(retry, sender, clientId);
       return;
-    case 'ask': {
-      await handleRunAsk(retry, sender);
+    case 'ask':
+      await handleRunAsk(retry, sender, clientId);
       return;
-    }
     default:
       await showTabNotice(tab.id, 'This request can no longer be retried', await getSettings(), clientId);
       return;
@@ -411,6 +410,8 @@ async function handleRefine({ actionId, conversation, preset, instruction, sourc
       : pickLLMConfig(settings.modelConfigs, action.modelConfigId);
     if (!config) throw new Error('No LLM model configured');
     if (config.provider === 'deepl') throw new Error('Refine is not available for DeepL');
+    const keyError = missingApiKeyError(config);
+    if (keyError) throw new Error(keyError);
 
     return {
       config,
@@ -541,25 +542,36 @@ async function showAskPrompt(tab, selectionText, settings) {
   });
 }
 
-// Question submitted from the Ask input
-async function handleRunAsk({ question, selectionText }, sender) {
+// Question submitted from the Ask input (or its retry). The page already
+// shows a spinner for `clientId` — every early exit answers with a notice,
+// or that spinner never clears.
+async function handleRunAsk({ question, selectionText }, sender, clientId = null) {
   const tab = sender?.tab;
   if (!tab?.id) return;
-  if (typeof question !== 'string' || !question.trim()) return;
-  if (typeof selectionText !== 'string' || !selectionText.trim()) return;
 
   const settings = await getSettings();
-  await runAsk(question, selectionText, tab, settings);
+  if (typeof selectionText !== 'string' || !selectionText.trim()) {
+    await showTabNotice(tab.id, 'Select some text first', settings, clientId);
+    return;
+  }
+  if (typeof question !== 'string' || !question.trim()) {
+    await showTabNotice(tab.id, 'Type a question first', settings, clientId);
+    return;
+  }
+  if (!pickLLMConfig(settings.modelConfigs)) {
+    await showTabNotice(tab.id, ASK_NEEDS_LLM_MESSAGE, settings, clientId);
+    return;
+  }
+  await runAsk(question, selectionText, tab, settings, clientId);
 }
 
 // Free-form question about the selection — always a tooltip answer, first LLM config
-function runAsk(question, selectionText, tab, settings) {
+function runAsk(question, selectionText, tab, settings, clientId = null) {
   return runChat(tab, settings, async () => {
     const config = pickLLMConfig(settings.modelConfigs);
     if (!config) throw new Error(ASK_NEEDS_LLM_MESSAGE);
-    if (!config.apiKey) {
-      throw new Error('Missing API key. Please configure the API key in settings.');
-    }
+    const keyError = missingApiKeyError(config);
+    if (keyError) throw new Error(keyError);
     const prompt = buildAskPrompt(question, selectionText);
     return {
       config,
@@ -570,7 +582,7 @@ function runAsk(question, selectionText, tab, settings) {
       editable: false,
       meta: { actionId: ASK_ACTION_ID, actionName: 'Ask', sourceText: selectionText }
     };
-  }, { kind: 'ask', question, selectionText });
+  }, { kind: 'ask', question, selectionText }, clientId);
 }
 
 // Shared AI flow for text actions — callers guarantee a non-empty selectionText
@@ -585,9 +597,8 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
       throw new Error('No model configured. Please add a model in the extension settings.');
     }
     // Custom endpoints (Ollama, LM Studio) may run without a key
-    if (!config.apiKey && config.provider !== 'custom') {
-      throw new Error('Missing API key. Please configure the API key in settings.');
-    }
+    const keyError = missingApiKeyError(config);
+    if (keyError) throw new Error(keyError);
 
     // DeepL takes the raw selection (no prompt template, no system prompt)
     const isDeepL = config.provider === 'deepl';
