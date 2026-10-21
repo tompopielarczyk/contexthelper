@@ -2,6 +2,7 @@ import { getSettings, saveSettings, onSettingsChanged, isFirstRun, markInitializ
 import { callAI } from './lib/api-client.js';
 import { sendWebhook, renderTemplate } from './lib/webhook.js';
 import { shouldStream, createThrottle, isRetryableError } from './lib/chat.js';
+import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
 const FLOATING_MENU_ID = 'contexthelper-floating-toggle';
@@ -320,7 +321,11 @@ async function handleRetryRun(retry, sender) {
         await showTabNotice(tab.id, 'Action no longer exists', settings);
         return;
       }
-      await runAction(action, { selectionText: retry.selectionText, editable: !!retry.editable }, tab, settings);
+      await runAction(action, {
+        selectionText: retry.selectionText,
+        editable: !!retry.editable,
+        pageVars: sanitizePageVars(retry.pageVars) // invalid → null → refetched
+      }, tab, settings);
       return;
     }
     default:
@@ -398,8 +403,11 @@ async function handleCommand(command, tab) {
 }
 
 // Shared AI flow for text actions — callers guarantee a non-empty selectionText
-function runAction(action, { selectionText, editable }, tab, settings) {
+function runAction(action, { selectionText, editable, pageVars = null }, tab, settings) {
   const displayMode = action.displayMode || 'auto';
+  // Filled with the page vars inside buildRequest, so a retry reuses the
+  // context captured with the original selection instead of re-reading the page
+  const retrySpec = { kind: 'action', actionId: action.id, selectionText, editable: !!editable };
   return runChat(tab, settings, async () => {
     const config = resolveModelConfig(settings.modelConfigs, action.modelConfigId);
     if (!config) {
@@ -414,7 +422,13 @@ function runAction(action, { selectionText, editable }, tab, settings) {
     if (isDeepL && !action.targetLang) {
       throw new Error('No target language set for this action. Please configure it in settings.');
     }
-    const prompt = isDeepL ? selectionText : action.template.replaceAll('{{text}}', selectionText);
+    const pageContext = !isDeepL && templateUsesPageContext(action.template)
+      ? (pageVars || await getPageContext(tab))
+      : null;
+    if (pageContext) retrySpec.pageVars = pageContext;
+    const prompt = isDeepL
+      ? selectionText
+      : renderActionPrompt(action.template, { text: selectionText, ...pageContext });
 
     return {
       config,
@@ -426,7 +440,7 @@ function runAction(action, { selectionText, editable }, tab, settings) {
       editable,
       meta: { actionId: action.id, actionName: action.name, sourceText: selectionText }
     };
-  }, { kind: 'action', actionId: action.id, selectionText, editable: !!editable });
+  }, retrySpec);
 }
 
 /**
@@ -580,6 +594,68 @@ async function getSelectionFromTab(tabId) {
   } catch {
     // Restricted page (chrome://, about:, etc.)
     return null;
+  }
+}
+
+/**
+ * Page context for {{context}} / {{pageTitle}} / {{pageUrl}}: the selection's
+ * surrounding block (windowed around the selection), plus title and URL.
+ * Restricted pages or a throw fall back to '' context and the tab's title/url.
+ */
+async function getPageContext(tab) {
+  const fallback = { context: '', pageTitle: tab.title || '', pageUrl: tab.url || '' };
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const title = document.title;
+        const url = location.href;
+        const el = document.activeElement;
+        const isTextControl = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
+        if (isTextControl) {
+          let start = null;
+          let end = null;
+          try {
+            // Throws on input types without a text selection (e.g. number)
+            start = el.selectionStart;
+            end = el.selectionEnd;
+          } catch { /* no text selection */ }
+          if (start != null && end != null && end > start) {
+            // Never send the whole value of a password or payment field
+            const autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
+            const sensitive = autocomplete.includes('password')
+              || autocomplete.split(/\s+/).some(token => token.startsWith('cc-'));
+            const textType = el.tagName === 'TEXTAREA'
+              || ['text', 'search', 'url', 'email', 'tel'].includes((el.type || '').toLowerCase());
+            if (sensitive || !textType) return { blockText: '', start: 0, end: 0, title, url };
+            return { blockText: el.value, start, end, title, url };
+          }
+        }
+        const sel = window.getSelection();
+        const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+        if (!range || range.collapsed) return { blockText: '', start: 0, end: 0, title, url };
+
+        let node = range.commonAncestorContainer;
+        if (node.nodeType !== Node.ELEMENT_NODE) node = node.parentElement;
+        const block = (node && node.closest('p,li,td,th,blockquote,pre,dd,article,section,div'))
+          || document.body;
+        const pre = document.createRange();
+        pre.selectNodeContents(block);
+        pre.setEnd(range.startContainer, range.startOffset);
+        const start = pre.toString().length;
+        const end = start + range.toString().length;
+        return { blockText: block.textContent || '', start, end, title, url };
+      }
+    });
+    const r = results?.[0]?.result;
+    if (!r) return fallback;
+    return {
+      context: r.blockText ? windowAround(r.blockText, r.start, r.end) : '',
+      pageTitle: r.title || fallback.pageTitle,
+      pageUrl: r.url || fallback.pageUrl
+    };
+  } catch {
+    return fallback;
   }
 }
 
