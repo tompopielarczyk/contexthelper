@@ -79,14 +79,16 @@ function streamResponse(chunks, { hang = false } = {}) {
   return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
+// Restore to the real fetch, not the previous stub: a test may stub twice
+const REAL_FETCH = globalThis.fetch;
+
 function stubFetch(t, makeResponse) {
-  const original = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options, body: options?.body ? JSON.parse(options.body) : null });
     return makeResponse(url, options);
   };
-  t.after(() => { globalThis.fetch = original; });
+  t.after(() => { globalThis.fetch = REAL_FETCH; });
   return calls;
 }
 
