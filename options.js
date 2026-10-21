@@ -1,6 +1,6 @@
 import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList, customOrigins } from './lib/storage.js';
 import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, normalizeBaseUrl, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
-import { testWebhook, requestWebhookPermission, requestOriginPermissions, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
+import { testWebhook, requestWebhookPermission, requestOriginPermissions, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
 
 // ── DOM refs ────────────────────────────────────────
@@ -1152,10 +1152,16 @@ async function onSave() {
     } else if (!wantAllSites && floatingAllSitesStored) {
       await chrome.permissions.remove({ origins: ALL_SITE_ORIGINS }).catch(() => { /* keep the grant */ });
     }
-    await chrome.permissions.request({
-      origins: [...chrome.runtime.getManifest().host_permissions, ...domainOrigins, ...customOriginList]
-    }).catch(() => { /* gesture consumed by a prompt above — next save repairs */ });
-    return granted;
+    // Everything the remove may have subtracted, webhook origins included
+    const restored = await chrome.permissions.request({
+      origins: buildRestoreOrigins({
+        manifestHosts: chrome.runtime.getManifest().host_permissions,
+        domains: domainOrigins,
+        webhookUrls,
+        customOrigins: customOriginList
+      })
+    }).catch(() => false); // e.g. gesture consumed by a prompt above — next save repairs
+    return { granted, restored };
   })();
 
   // width/height are owned by the tooltip's resize handle (content.js), and
@@ -1172,7 +1178,7 @@ async function onSave() {
     height: currentTs.height
   };
 
-  const allSitesGranted = await allSitesPromise;
+  const { granted: allSitesGranted, restored: permissionsRestored } = await allSitesPromise;
   if (!allSitesGranted) floatingAllSites.checked = false;
 
   const floatingButtonSettings = {
@@ -1194,6 +1200,7 @@ async function onSave() {
     if (!granted && webhookUrls.length) warnings.push('webhook origin permission not granted, sending will fail');
     if (!granted && customOriginList.length) warnings.push('custom endpoint permission not granted');
     if (wantAllSites && !allSitesGranted) warnings.push('all-sites permission denied — floating button stays per-domain');
+    if (!permissionsRestored) warnings.push('some permissions could not be restored — click Save again');
     showSaveStatus(warnings.length ? `Saved — ${warnings.join('; ')}` : 'Saved', warnings.length === 0);
   } catch (err) {
     await permissionsPromise.catch(() => {});

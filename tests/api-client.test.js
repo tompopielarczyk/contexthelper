@@ -354,12 +354,17 @@ test('normalizeBaseUrl strips trailing slash and /chat/completions', () => {
 });
 
 test('normalizeBaseUrl allows http only for local/private hosts', () => {
-  for (const ok of ['http://127.0.0.1:1234/v1', 'http://192.168.1.5/v1', 'http://10.0.0.2/v1', 'http://172.20.0.1/v1', 'http://nas.local/v1', 'http://[::1]:8080/v1', 'http://app.localhost/v1'])
+  for (const ok of ['http://127.0.0.1:1234/v1', 'http://192.168.1.5/v1', 'http://10.0.0.2/v1', 'http://172.20.0.1/v1', 'http://nas.local/v1', 'http://app.localhost/v1'])
     assert.doesNotThrow(() => normalizeBaseUrl(ok), ok);
   assert.throws(() => normalizeBaseUrl('http://api.example.com/v1'), /HTTPS/);
   assert.throws(() => normalizeBaseUrl('http://172.32.0.1/v1'), /HTTPS/);
   assert.throws(() => normalizeBaseUrl('ftp://localhost/v1'), /Invalid base URL/);
   assert.throws(() => normalizeBaseUrl('not a url'), /Invalid base URL/);
+});
+
+test('normalizeBaseUrl rejects IPv6 literal hosts (not grantable as match patterns)', () => {
+  for (const url of ['http://[::1]:8080/v1', 'https://[2001:db8::1]/v1'])
+    assert.throws(() => normalizeBaseUrl(url), /^Error: IPv6 addresses are not supported — use localhost or 127\.0\.0\.1$/, url);
 });
 
 test('normalizeBaseUrl rejects empty and non-string input', () => {
@@ -406,6 +411,25 @@ test('custom provider maps 403 to the OLLAMA_ORIGINS hint', async (t) => {
     (err) => err.name === 'APIError' && err.status === 403 &&
       err.message === 'Endpoint refused the request (403). For Ollama, set OLLAMA_ORIGINS=chrome-extension://* and restart it.'
   );
+});
+
+test('custom provider keeps the hint for a JSON-bodied 403', async (t) => {
+  stubFetch(t, () => new Response(JSON.stringify({ error: { message: 'x' } }), { status: 403 }));
+  await assert.rejects(
+    callAI({ provider: 'custom', apiKey: '', model: 'm', baseUrl: 'http://localhost:11434/v1', prompt: 'p' }),
+    (err) => err.status === 403 && /OLLAMA_ORIGINS/.test(err.message)
+  );
+});
+
+test('custom provider passes 401 and 500 through with the normal messages', async (t) => {
+  for (const status of [401, 500]) {
+    stubFetch(t, () => new Response(JSON.stringify({ error: { message: 'boom' } }), { status }));
+    await assert.rejects(
+      callAI({ provider: 'custom', apiKey: 'k', model: 'm', baseUrl: 'http://localhost:11434/v1', prompt: 'p' }),
+      (err) => err.name === 'APIError' && err.status === status && !/OLLAMA_ORIGINS/.test(err.message) &&
+        err.message === (status === 401 ? 'Invalid API key. Please check your settings.' : 'API server temporarily unavailable. Please try again.')
+    );
+  }
 });
 
 test('custom provider names itself in errors and rejects a bad base URL before fetching', async (t) => {
