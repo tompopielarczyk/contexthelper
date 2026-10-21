@@ -1,14 +1,14 @@
 # ContextHelper — Privacy Policy
 
-_Last updated: 2026-07-20_
+_Last updated: 2026-10-21_
 
 ContextHelper is a browser extension that runs AI-powered actions (translation, summarization, rewriting, etc.) on text you select on a web page, using AI providers **you** configure with **your own** API keys.
 
 ## What data the extension processes
 
-- **Selected text** — the text you explicitly select and run an action on is sent directly from your browser to the AI provider you configured for that action (Anthropic, OpenAI, Google Gemini, OpenRouter, or DeepL). It is never sent anywhere else.
-- **Page URL and title** — included in a webhook payload only if you configure a webhook and press its send button in the result tooltip.
-- **API keys** — stored locally in your browser (`chrome.storage.local`). They are only ever sent to the corresponding provider's official API endpoint. They are **not** synced to your Google account and never leave your machine otherwise.
+- **Selected text** — the text you explicitly select and run an action on (or ask a question about) is sent directly from your browser to the AI provider you configured (Anthropic, OpenAI, Google Gemini, OpenRouter, DeepL, or a custom OpenAI-compatible endpoint you set up). Follow-up and refine requests resend the previous answer together with your instruction. Nothing is sent anywhere else.
+- **Surrounding text, page URL and title** — sent to your AI provider **only** if one of your action templates uses the `{{context}}`, `{{pageUrl}}` or `{{pageTitle}}` placeholder. `{{context}}` is the paragraph (or text field) around your selection, limited to about 2000 characters; the values of password and payment-card fields are never read. The page URL and title are also included in a webhook payload if you configure a webhook and press its send button in the result tooltip.
+- **API keys** — stored locally in your browser (`chrome.storage.local`). They are only ever sent to the corresponding provider's official API endpoint, or — for a custom endpoint — to the base URL you entered for it. They are **not** synced to your Google account and never leave your machine otherwise.
 - **Settings** (actions, appearance, keyboard shortcut slots) — stored via `chrome.storage.sync` so they follow your Chrome profile. They contain no secrets.
 
 ## What the extension does NOT do
@@ -27,13 +27,14 @@ When you run an action, the selected text is processed by the provider you chose
 - Google (Gemini API) — https://policies.google.com/privacy
 - OpenRouter — https://openrouter.ai/privacy
 - DeepL — https://www.deepl.com/privacy
+- Custom endpoints (e.g. a local Ollama or LM Studio server) — whatever server you point the extension at; for a server on your own machine, data never leaves it.
 
 If you configure webhooks, the rendered payload (AI result, source text, page URL/title, action name, timestamp, model name) is sent to the URL you configured, only when you press the send button.
 
 ## Permissions
 
 - **Host access to AI provider APIs** — required to call the providers listed above.
-- **Optional host access** (granted per-site by you) — used only for the optional floating selection button and for webhook endpoints you add.
+- **Optional host access** (granted per-site by you) — used only for the optional floating selection button, for webhook endpoints you add, and for custom model endpoints you add.
 - **contextMenus, storage, activeTab, scripting** — used to show the action menu, store your settings, and display the result overlay on the current tab.
 
 ## Contact

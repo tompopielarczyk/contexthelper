@@ -20,7 +20,11 @@
 ## Features
 
 - **Bring your own key** — works directly with Anthropic (Claude), OpenAI (GPT), Google Gemini, OpenRouter (300+ models incl. open-source), and DeepL
-- **Custom actions** — define any prompt with a `{{text}}` placeholder; reorder, assign models per action
+- **Local models** — any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM), API key optional
+- **Custom actions** — define any prompt with a `{{text}}` placeholder, plus optional `{{context}}` (surrounding paragraph), `{{pageTitle}}` and `{{pageUrl}}`; reorder, assign models per action
+- **Streaming results** — answers appear as they are generated; failed requests offer **Retry**
+- **Refine in place** — Shorter, Longer, Simpler, Retry or a free-text follow-up, right in the result tooltip
+- **Ask about selection** — type an ad-hoc question about the selected text (menu item or a keyboard shortcut you assign)
 - **Three ways to trigger:**
   - right-click → **ContextHelper** menu
   - keyboard shortcuts (4 configurable slots)
@@ -51,6 +55,7 @@ Select text, run an action, get the result in a tooltip — with one-click webho
 ## Privacy
 
 - Selected text goes **directly from your browser to the provider you chose** — nowhere else
+- Page context (surrounding text, URL, title) is sent only if your action template asks for it
 - API keys are stored locally (`chrome.storage.local`), never synced, never transmitted except to the provider's official API
 - No analytics, no telemetry
 - Site access is **opt-in per domain** — the extension does not request access to all websites
