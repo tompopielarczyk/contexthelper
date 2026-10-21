@@ -335,3 +335,12 @@ test('openai request uses max_completion_tokens', async (t) => {
   assert.equal(calls[0].body.max_completion_tokens, 4096);
   assert.equal('max_tokens' in calls[0].body, false);
 });
+
+test('single assistant message keeps the Gemini model role', async (t) => {
+  const calls = stubFetch(t, () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'x' }] } }] }), { status: 200 }));
+  await callAI({ provider: 'google', apiKey: 'k', model: 'gm', messages: [{ role: 'assistant', content: 'Draft' }] });
+  assert.equal(calls[0].options.body, JSON.stringify({
+    contents: [{ role: 'model', parts: [{ text: 'Draft' }] }],
+    generationConfig: { maxOutputTokens: 4096, temperature: 0.3 }
+  }));
+});
