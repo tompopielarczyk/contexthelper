@@ -217,6 +217,30 @@
     - a close button;
     - a CSS caret;
     - auto-scroll only within 24 px of the bottom.
+  - **Retry after an error.**
+    - **Message.** `AI_ERROR` gains `retry: RetrySpec | null` and `partialText: string` (the text streamed before the failure, or `''`).
+    - **`RetrySpec` (one variant per task):**
+      - `{ kind: 'action', actionId, selectionText, editable }` (Task 1);
+      - `{ kind: 'refine', actionId, conversation, instruction, sourceText }` (Task 4);
+      - `{ kind: 'ask', question, selectionText }` (Task 5).
+    - **When `retry` is set.** `runChat` sets it only when the failure came from `callAI`: network, timeout, stall, 429, 5xx or a mid-stream provider error. Errors thrown by `buildRequest` (missing model or key, missing action, DeepL refine) get `retry: null`, because retrying cannot fix them.
+    - **Building the spec.** `runChat` receives the spec in its third argument, `runChat(tab, settings, buildRequest, retrySpec)`. Each caller passes its own variant.
+    - **Re-dispatch.** New message `RETRY_RUN { retry }` (content → background). `handleRetryRun` dispatches on `retry.kind`:
+      - `'action'` → resolve the action by id → `runAction`;
+      - `'refine'` → `handleRefine`;
+      - `'ask'` → the `RUN_ASK` handler.
+
+      Unknown kinds are ignored. Task 1 implements `'action'`; Tasks 4 and 5 each add their own `case`.
+    - **`showErrorTooltip(message, ts, opts = {})`** with `opts = { retry?, partialText?, position? }`:
+      - with `partialText`, render it above the error (plain text, muted) and add a `Copy partial` button;
+      - with `retry`, add a `↻ Retry` button and **disable the 6 s auto-dismiss**;
+      - the button's `mousedown` calls `preventDefault()`, so page focus and selection survive and an insert-mode retry can still replace the original text;
+      - click → `hideOverlay()`, then `sendMessage({ type: 'RETRY_RUN', retry })`;
+      - when the error replaces a streaming tooltip, read its top/left before `hideOverlay()` (same as for `AI_RESULT`).
+    - **Tests** (`tests/chat.test.js`). Pure helper `isRetryableError(err): boolean` in `lib/chat.js`:
+      - `true` for an `APIError` with `status === 0` (timeout, stall, stream error, network), `429` or `>= 500`;
+      - `false` for `401`, `403`, `456`, other `4xx`, plain `Error` (config errors from `buildRequest`) and `AbortError`.
+      - To keep `APIError` identifiable without importing the class, check `err?.name === 'APIError'` and `err.status`.
   - **Dismissal** (Esc, close or outside click) of the streaming tooltip **and of the spinner**:
     1. sends `CANCEL_ACTION { requestId: activeRequestId }`;
     2. sets `activeRequestId = null`;
