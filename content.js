@@ -132,6 +132,14 @@
         });
         break;
       }
+      case 'ASK_PROMPT': {
+        if (typeof message.selectionText !== 'string' || !message.selectionText.trim()) return;
+        // A run still showing here would replace the input with its result
+        cancelActiveRun();
+        hideFloatingButton();
+        showAskInput(message.selectionText, ts);
+        break;
+      }
     }
   });
 
@@ -553,6 +561,77 @@
     bar.appendChild(input);
 
     return bar;
+  }
+
+  /**
+   * Single-line question input for "Ask about selection…". Submitting sends
+   * RUN_ASK through requestRun; the answer comes back through the normal AI_* messages.
+   * @param {string} selectionText
+   * @param {object} ts  tooltipSettings
+   */
+  function showAskInput(selectionText, ts) {
+    // A keyboard selection (Shift+Arrow) never fires mouseup — refresh the
+    // rect from the live selection first. Then store both before focusing the
+    // input: focus moves the page selection, and mouseup inside the overlay
+    // re-runs captureSelectionRect
+    captureInitialSelection();
+    const anchorRect = lastSelectionRect;
+    const text = selectionText;
+
+    ensureShadowHost();
+    hideOverlay();
+
+    const pos = getPosition(ts?.position, { width: 360, height: 52 });
+    const el = document.createElement('div');
+    el.className = 'cmn-overlay cmn-ask';
+    applyTooltipStyles(el, ts);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cmn-ask-input';
+    input.placeholder = 'Ask about the selection…';
+    input.setAttribute('aria-label', 'Question about the selected text');
+
+    const askBtn = document.createElement('button');
+    askBtn.className = 'cmn-btn cmn-btn-primary';
+    askBtn.textContent = 'Ask';
+
+    const submit = () => {
+      const question = input.value;
+      if (!question.trim()) {
+        input.focus();
+        return;
+      }
+      // The spinner and the answer open at the selection, not at the input
+      lastSelectionRect = anchorRect;
+      // Early spinner + clientId, like refine/retry (requestRun hides the input)
+      requestRun({ type: 'RUN_ASK', question, selectionText: text }, ts);
+    };
+
+    // Keys typed here must not reach page shortcuts (closed shadow root:
+    // the page would see them as coming from the host element)
+    const stopKeys = (e) => e.stopPropagation();
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.isComposing) return; // IME: Enter/Esc belong to the composition
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        hideOverlay();
+      }
+    });
+    input.addEventListener('keyup', stopKeys);
+    input.addEventListener('keypress', stopKeys);
+    askBtn.addEventListener('click', submit);
+
+    el.appendChild(input);
+    el.appendChild(askBtn);
+    appendAndClampOverlay(el, pos);
+    input.focus();
+
+    addOutsideClickHandler(hideOverlay);
   }
 
   /**
@@ -1626,6 +1705,41 @@
         color: #374151;
         font-size: 13px;
         transition: max-width 0.15s ease, opacity 0.15s ease, margin-left 0.15s ease;
+      }
+
+      .cmn-ask {
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: min(360px, calc(100vw - 16px));
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 8px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+      }
+
+      /* display: flex above beats the UA [hidden] rule — restore it (CLAUDE.md pitfall) */
+      .cmn-ask[hidden] {
+        display: none;
+      }
+
+      .cmn-ask-input {
+        flex: 1;
+        min-width: 0;
+        box-sizing: border-box;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        padding: 5px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        outline: none;
+      }
+
+      .cmn-ask-input:focus {
+        border-color: #f97316;
       }
 
       .cmn-float-btn:hover .cmn-float-label {

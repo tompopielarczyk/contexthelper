@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { shouldStream, pickLLMConfig, ASK_ACTION_ID, createThrottle, isRetryableError } from '../lib/chat.js';
+import {
+  shouldStream, pickLLMConfig, ASK_ACTION_ID, createThrottle, isRetryableError, buildAskPrompt,
+  buildRefineMessages, sanitizeConversation, REFINE_PRESETS, MAX_CONVERSATION_MESSAGES,
+  resolveRefineInstruction, sanitizeClientId, missingApiKeyError
+} from '../lib/chat.js';
 
 test('shouldStream truth table', () => {
   assert.equal(shouldStream({ provider: 'deepl', displayMode: 'tooltip', editable: false }), false);
@@ -89,7 +93,6 @@ test('isRetryableError', () => {
 });
 
 // --- Task 4: refine ---------------------------------------------------------
-import { buildRefineMessages, sanitizeConversation, REFINE_PRESETS, MAX_CONVERSATION_MESSAGES } from '../lib/chat.js';
 
 const conv = [{ role: 'user', content: 'P' }, { role: 'assistant', content: 'R' }];
 test('buildRefineMessages appends instruction / drops last answer on retry', () => {
@@ -134,7 +137,6 @@ test('REFINE_PRESETS and MAX_CONVERSATION_MESSAGES', () => {
 });
 
 // --- Task 4 review fixes ----------------------------------------------------
-import { resolveRefineInstruction, sanitizeClientId } from '../lib/chat.js';
 
 test('sanitizeConversation keeps exactly 20 messages untrimmed', () => {
   const twenty = Array.from({ length: 20 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: String(i) }));
@@ -161,4 +163,22 @@ test('sanitizeClientId', () => {
   assert.equal(sanitizeClientId(''), null);
   assert.equal(sanitizeClientId(42), null);
   assert.equal(sanitizeClientId(undefined), null);
+});
+
+test('buildAskPrompt', () => {
+  assert.equal(buildAskPrompt('  Why? ', 'abc'), 'Why?\n\nSelected text:\n"""\nabc\n"""');
+});
+
+test('buildAskPrompt inserts a multi-line selection verbatim', () => {
+  const text = 'line 1\n"""quoted"""\n  line 3 $& {{text}}';
+  assert.equal(buildAskPrompt('Q', text), `Q\n\nSelected text:\n"""\n${text}\n"""`);
+});
+
+test('missingApiKeyError', () => {
+  const msg = 'Missing API key. Please configure the API key in settings.';
+  assert.equal(missingApiKeyError({ provider: 'openai', apiKey: '' }), msg);
+  assert.equal(missingApiKeyError({ provider: 'openai', apiKey: '   ' }), msg);
+  assert.equal(missingApiKeyError({ provider: 'openai' }), msg);
+  assert.equal(missingApiKeyError({ provider: 'custom', apiKey: '' }), null);
+  assert.equal(missingApiKeyError({ provider: 'anthropic', apiKey: 'sk-ant-x' }), null);
 });
