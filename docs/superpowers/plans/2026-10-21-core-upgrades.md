@@ -191,7 +191,7 @@
   - `createThrottle(fn, ms)`: trailing-edge, `{ call(arg), flush(), cancel() }`.
 - **`background.js`:**
   - **Request ids** come from `crypto.randomUUID()`, so content-side comparisons survive a worker restart. `_abortControllersByTab: Map<tabId, { controller, requestId }>`.
-  - **`runChat(tab, settings, buildRequest)`**, where `buildRequest: () => Promise<ChatRequest>` and `ChatRequest = { config, messages, prompt, systemPrompt, targetLang, displayMode, editable, meta: { actionId, actionName, sourceText } }`. The runner:
+  - **`runChat(tab, settings, buildRequest, retrySpec = null)`**, where `buildRequest: () => Promise<ChatRequest>` and `ChatRequest = { config, messages, prompt, systemPrompt, targetLang, displayMode, editable, meta: { actionId, actionName, sourceText } }`. The runner:
     1. aborts the previous run for the tab;
     2. `ensureContentScript`, then `AI_PROCESSING_START`;
     3. awaits `buildRequest()` (its throws → `AI_ERROR`);
@@ -199,7 +199,7 @@
     5. starts the keepalive (`setInterval(() => chrome.runtime.getPlatformInfo(), 20_000)`, cleared in `finally`);
     6. calls `callAI` with `onDelta` only when `shouldStream(...)`;
     7. on completion → flushes and cancels the throttle, then sends `AI_RESULT`;
-    8. on error → cancels the throttle; if aborted, returns silently; otherwise sends `AI_ERROR`.
+    8. on error → cancels the throttle; if aborted, returns silently; otherwise sends `AI_ERROR` with `partialText` and, when `isRetryableError(err)`, the caller's `retrySpec` (see "Retry after an error" below).
   - **`runAction`** builds its `ChatRequest` (existing validation and `replaceAll` prompt for now; Task 3 swaps the renderer) and calls `runChat`.
 - **Messages:**
   - `AI_CHUNK { requestId, text, tooltipSettings }`: accumulated text, throttle 100 ms.
@@ -224,7 +224,7 @@
       - `{ kind: 'refine', actionId, conversation, instruction, sourceText }` (Task 4);
       - `{ kind: 'ask', question, selectionText }` (Task 5).
     - **When `retry` is set.** `runChat` sets it only when the failure came from `callAI`: network, timeout, stall, 429, 5xx or a mid-stream provider error. Errors thrown by `buildRequest` (missing model or key, missing action, DeepL refine) get `retry: null`, because retrying cannot fix them.
-    - **Building the spec.** `runChat` receives the spec in its third argument, `runChat(tab, settings, buildRequest, retrySpec)`. Each caller passes its own variant.
+    - **Building the spec.** `runChat` receives the spec in its fourth argument, `runChat(tab, settings, buildRequest, retrySpec)`. Each caller passes its own variant.
     - **Re-dispatch.** New message `RETRY_RUN { retry }` (content → background). `handleRetryRun` dispatches on `retry.kind`:
       - `'action'` → resolve the action by id → `runAction`;
       - `'refine'` → `handleRefine`;
@@ -511,7 +511,7 @@ test('windowAround keeps selection, marks cuts, respects max', () => {
   - `buildRefineMessages(conversation, instruction: string | null)`:
     - `null` (Retry) → the conversation without its trailing assistant message;
     - otherwise → the conversation plus `{ role: 'user', content: instruction.trim() }`.
-  - Message `REFINE_ACTION { actionId, conversation, instruction, sourceText }` goes content → background → `runChat(tab, settings, buildRequest)`. `buildRequest` throws (so `AI_ERROR` goes through the START gating) in these cases:
+  - Message `REFINE_ACTION { actionId, conversation, instruction, sourceText }` goes content → background → `runChat(tab, settings, buildRequest, { kind: 'refine', actionId, conversation, instruction, sourceText })`. Also add `case 'refine'` to `handleRetryRun` → `handleRefine`. `buildRequest` throws (so `AI_ERROR` goes through the START gating) in these cases:
 
     | Condition | Error |
     |---|---|
@@ -591,6 +591,8 @@ test('sanitizeConversation trims to first pair + last 18', () => {
     - `editable: false`;
     - `meta: { actionId: ASK_ACTION_ID, actionName: 'Ask', sourceText }`;
     - `systemPrompt` from settings.
+
+    The `retrySpec` is `{ kind: 'ask', question, selectionText }`. Also add `case 'ask'` to `handleRetryRun`.
   - **`showAskInput`:**
     - stores `selectionText` and the anchor rect **before** focusing anything;
     - is an overlay at `lastSelectionRect`;
@@ -641,6 +643,11 @@ test('buildAskPrompt', () => {
   - **M1:** streaming for Anthropic, OpenAI, Gemini and OpenRouter, plus a slow reasoning model (>30 s to first token).
   - **M2:** an insert-mode action in a textarea still replaces the text atomically.
   - **M3:** Esc on the spinner, and Esc mid-stream, then another action. No stale tooltip.
+  - **M3b:** error retry. With the network offline or the key revoked mid-stream:
+    - the error tooltip shows the partial text and `↻ Retry`;
+    - Retry works for an action, a refine and an Ask;
+    - an insert-mode retry in a textarea still replaces the selection;
+    - a 401 error shows no Retry.
   - **M4:** Shorter / Retry / Follow up. Typing in the follow-up input on a page with global hotkeys (e.g. GitHub, Gmail) does not trigger them.
   - **M5:** `{{context}}` on an article paragraph, inside a textarea, and with the same word repeated in a paragraph.
   - **M6:** Ask via the menu, via the `ask-selection` shortcut (assigned in `chrome://extensions/shortcuts`), and with zero actions configured.
