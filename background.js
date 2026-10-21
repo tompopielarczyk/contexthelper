@@ -219,12 +219,13 @@ async function handleMenuClick(info, tab) {
 
 // info.selectionText of an editable selection may come from a password or
 // payment field. Probe the focused field in the frame that was clicked and
-// stop with a notice when it is sensitive — or when the frame can't be
-// probed (fail closed: we can't tell).
+// stop with a notice when it is sensitive — or when we can't tell (fail
+// closed): the frame can't be probed, or the probe didn't reach an editable
+// element (e.g. focus on the host of a closed shadow root).
 async function blockSensitiveMenuSelection(info, tab, settings) {
   if (!info.editable) return false;
   const probe = await runSelectionProbe(tab.id, { frameId: info.frameId ?? 0 });
-  if (probe && !probe.sensitive) return false;
+  if (probe && probe.inspected && !probe.sensitive) return false;
   await showTabNotice(tab.id, SENSITIVE_FIELD_MESSAGE, settings);
   return true;
 }

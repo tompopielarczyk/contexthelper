@@ -122,10 +122,10 @@ test('a text input with a selection returns that selection and its context', (t)
   const el = control({ type: 'search', value: 'find the needle here', start: 9, end: 15 });
   withPage(t, { activeElement: el });
   assert.deepEqual(injected(SELECTION_RULES, false), {
-    text: 'needle', editable: true, sensitive: false, blockText: '', start: 0, end: 0, ...PAGE
+    text: 'needle', editable: true, sensitive: false, inspected: true, blockText: '', start: 0, end: 0, ...PAGE
   });
   assert.deepEqual(injected(SELECTION_RULES, true), {
-    text: 'needle', editable: true, sensitive: false, blockText: 'find the needle here', start: 9, end: 15, ...PAGE
+    text: 'needle', editable: true, sensitive: false, inspected: true, blockText: 'find the needle here', start: 9, end: 15, ...PAGE
   });
 });
 
@@ -195,7 +195,7 @@ test('a contenteditable selection is editable; no selection gives empty text', (
 
   withPage(t, { activeElement: null, selection: null });
   assert.deepEqual(injected(SELECTION_RULES, true), {
-    text: '', editable: false, sensitive: false, blockText: '', start: 0, end: 0, ...PAGE
+    text: '', editable: false, sensitive: false, inspected: false, blockText: '', start: 0, end: 0, ...PAGE
   });
 });
 
@@ -235,4 +235,37 @@ test('unreadable offsets on a sensitive field block only when the page selection
   assert.equal(r.sensitive, false);
   assert.equal(r.text, 'page');
   assert.equal(pw.valueReads + nullOffsets.valueReads, 0);
+});
+
+// `inspected`: the probe actually reached the editable element (closed shadow
+// roots stop the focus walk at their host)
+test('a focused custom-element host without an open shadowRoot is not inspected', (t) => {
+  const { selection } = pageSelection('', 0, 0);
+  for (const host of [
+    { tagName: 'SECURE-INPUT', shadowRoot: null, isContentEditable: false },
+    { tagName: 'SECURE-INPUT', isContentEditable: false }
+  ]) {
+    withPage(t, { activeElement: host, selection });
+    const r = injected(SELECTION_RULES, false);
+    assert.equal(r.inspected, false);
+    assert.equal(r.sensitive, false);
+  }
+});
+
+test('text controls, contenteditable and fields inside open shadow roots are inspected', (t) => {
+  const { selection } = pageSelection('edit me', 0, 4);
+  const cases = [
+    control({ type: 'text', value: 'abc', start: 0, end: 1 }),
+    control({ type: 'checkbox' }),
+    control({ type: 'password', value: 'pw', start: 0, end: 2 }),
+    control({ tag: 'TEXTAREA', value: 'x', start: 0, end: 0 }),
+    { tagName: 'DIV', isContentEditable: true },
+    { tagName: 'MY-EDITOR', shadowRoot: { activeElement: control({ type: 'text', value: 'in', start: 0, end: 2 }) } }
+  ];
+  for (const el of cases) {
+    withPage(t, { activeElement: el, selection });
+    assert.equal(injected(SELECTION_RULES, false).inspected, true, el.tagName);
+  }
+  withPage(t, { activeElement: { tagName: 'BODY', isContentEditable: false }, selection });
+  assert.equal(injected(SELECTION_RULES, false).inspected, false);
 });
