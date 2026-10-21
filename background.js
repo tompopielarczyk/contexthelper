@@ -317,16 +317,25 @@ function handleCancelAction({ requestId }, sender) {
 }
 
 // "↻ Retry" in the error tooltip — re-dispatch by the spec runChat attached
-// to AI_ERROR. Unknown kinds are ignored. `clientId` is the page's id for
+// to AI_ERROR. Unknown kinds get a notice. `clientId` is the page's id for
 // the spinner it already shows (see runChat).
 async function handleRetryRun(retry, sender, clientId = null) {
   const tab = sender?.tab;
-  if (!tab?.id || !retry || typeof retry !== 'object') return;
+  if (!tab?.id) return;
+  // The page already shows a spinner for this request (clientId) — every
+  // early exit must answer with a notice, or that spinner never clears
+  if (!retry || typeof retry !== 'object') {
+    await showTabNotice(tab.id, 'This request can no longer be retried', await getSettings(), clientId);
+    return;
+  }
 
   switch (retry.kind) {
     case 'action': {
-      if (typeof retry.selectionText !== 'string' || !retry.selectionText.trim()) return;
       const settings = await getSettings();
+      if (typeof retry.selectionText !== 'string' || !retry.selectionText.trim()) {
+        await showTabNotice(tab.id, 'Select some text first', settings, clientId);
+        return;
+      }
       const action = (settings.actions || []).find(a => a.id === retry.actionId);
       if (!action) {
         await showTabNotice(tab.id, 'Action no longer exists', settings, clientId);
@@ -343,6 +352,7 @@ async function handleRetryRun(retry, sender, clientId = null) {
       await handleRefine(retry, sender, clientId);
       return;
     default:
+      await showTabNotice(tab.id, 'This request can no longer be retried', await getSettings(), clientId);
       return;
   }
 }

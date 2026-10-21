@@ -74,6 +74,12 @@
           } catch { /* extension reloaded mid-session */ }
           return;
         }
+        // Another run took the screen before the pending request's START:
+        // that request was superseded, so its START (if it still comes)
+        // must only cancel it — or dismissing this run would let it reopen
+        if (pendingClientId !== null && message.clientId !== pendingClientId) {
+          markClientIdDismissed(pendingClientId);
+        }
         pendingClientId = null;
         if (message.requestId !== undefined) activeRequestId = message.requestId;
         activeSelectionSnapshot = captureInsertionSnapshot();
@@ -316,15 +322,19 @@
       } catch { /* extension reloaded mid-session */ }
     } else if (pendingClientId !== null) {
       // START not here yet — remember the id so that START cancels the run
-      dismissedClientIds.add(pendingClientId);
-      if (dismissedClientIds.size > MAX_DISMISSED_CLIENT_IDS) {
-        dismissedClientIds.delete(dismissedClientIds.values().next().value);
-      }
+      markClientIdDismissed(pendingClientId);
     }
     pendingClientId = null;
     activeRequestId = null;
     activeSelectionSnapshot = null;
     hideOverlay();
+  }
+
+  function markClientIdDismissed(clientId) {
+    dismissedClientIds.add(clientId);
+    if (dismissedClientIds.size > MAX_DISMISSED_CLIENT_IDS) {
+      dismissedClientIds.delete(dismissedClientIds.values().next().value);
+    }
   }
 
   function getStreamingPosition() {
