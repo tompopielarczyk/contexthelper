@@ -351,7 +351,7 @@ test('non-streaming request unchanged', async (t) => {
   assert.equal('stream' in calls[0].body, false);
   assert.deepEqual(calls[0].body, {
     model: 'm',
-    max_completion_tokens: 4096,
+    max_completion_tokens: 16000,
     temperature: 0.3,
     messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'p' }]
   });
@@ -465,7 +465,7 @@ test('openai request uses max_completion_tokens', async (t) => {
   const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), { status: 200 }));
   await callAI({ provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p' });
   assert.equal(calls[0].url, 'https://api.openai.com/v1/chat/completions');
-  assert.equal(calls[0].body.max_completion_tokens, 4096);
+  assert.equal(calls[0].body.max_completion_tokens, 16000);
   assert.equal('max_tokens' in calls[0].body, false);
 });
 
@@ -678,4 +678,57 @@ test('openai stream chunk with finish_reason length counts as done', async (t) =
     streamTimeouts: { idleMs: 1000, totalMs: 2000 }
   });
   assert.equal(result, 'cut off');
+});
+
+// ── Temperature fallback and token budget (Revision 3, item 10) ──
+
+const TEMPERATURE_400 = { error: { message: "Unsupported value: 'temperature' does not support 0.3 with this model. Only the default (1) value is supported." } };
+const jsonResponse = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+const okChat = (content) => jsonResponse(200, { choices: [{ message: { content }, finish_reason: 'stop' }] });
+
+test('a temperature 400 is retried once without temperature, and the model is remembered', async (t) => {
+  let n = 0;
+  const calls = stubFetch(t, () => (++n === 1 ? jsonResponse(400, TEMPERATURE_400) : okChat('ok')));
+  assert.equal(await callAI({ provider: 'openai', apiKey: 'k', model: 'reasoner-a', prompt: 'p' }), 'ok');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.temperature, 0.3);
+  assert.equal('temperature' in calls[1].body, false);
+
+  // Same url + model: no temperature from the first request on
+  assert.equal(await callAI({ provider: 'openai', apiKey: 'k', model: 'reasoner-a', prompt: 'p' }), 'ok');
+  assert.equal(calls.length, 3);
+  assert.equal('temperature' in calls[2].body, false);
+});
+
+test('the temperature fallback also covers streaming and other chat-completions providers', async (t) => {
+  let n = 0;
+  const calls = stubFetch(t, () => (++n === 1
+    ? jsonResponse(400, TEMPERATURE_400)
+    : streamResponse([chatDelta('hi'), sse({ choices: [{ delta: {}, finish_reason: 'stop' }] })])));
+  const result = await callAI({ provider: 'openrouter', apiKey: 'k', model: 'reasoner-stream', prompt: 'p', onDelta: () => {} });
+  assert.equal(result, 'hi');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].body.stream, true);
+  assert.equal('temperature' in calls[1].body, false);
+});
+
+test('an unrelated 400 is not retried', async (t) => {
+  const calls = stubFetch(t, () => jsonResponse(400, { error: { message: 'Invalid messages array' } }));
+  await assert.rejects(callAI({ provider: 'openai', apiKey: 'k', model: 'reasoner-b', prompt: 'p' }), /Invalid messages array/);
+  assert.equal(calls.length, 1);
+});
+
+test('two temperature 400s in a row reject after two calls', async (t) => {
+  const calls = stubFetch(t, () => jsonResponse(400, TEMPERATURE_400));
+  await assert.rejects(callAI({ provider: 'custom', apiKey: '', baseUrl: 'http://localhost:1234/v1', model: 'reasoner-c', prompt: 'p' }), /temperature/);
+  assert.equal(calls.length, 2);
+});
+
+test('OpenAI gets a 16 000 token budget, OpenRouter keeps max_tokens 4096', async (t) => {
+  const calls = stubFetch(t, () => okChat('ok'));
+  await callAI({ provider: 'openai', apiKey: 'k', model: 'gpt-x', prompt: 'p' });
+  await callAI({ provider: 'openrouter', apiKey: 'k', model: 'some/model', prompt: 'p' });
+  assert.equal(calls[0].body.max_completion_tokens, 16000);
+  assert.equal(calls[1].body.max_tokens, 4096);
+  assert.equal('max_completion_tokens' in calls[1].body, false);
 });

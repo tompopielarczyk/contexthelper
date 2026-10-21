@@ -172,3 +172,45 @@ Add a test for each, plus negatives `100.128.0.1` and `169.255.0.1`.
   - an empty id → `configs[0]`.
   - Used by `runAction` and by refine of an action. DeepL rejection in refine stays. Tested.
 - **Update CLAUDE.md** for the protocol and lifetime changes: `AI_CHUNK` shape, watchdogs, probe, cancellation.
+
+---
+
+## Revision 3: items 10 and 11 (append to docs/superpowers/plans/2026-10-22-review-fixes.md)
+
+### 10. OpenAI-style reasoning models reject `temperature` and spend the token budget on reasoning
+Per the OpenAI docs (developers.openai.com "Migration quickstart"): "When reasoning effort is not `none`, remove `temperature`, `top_p`, and `top_logprobs`." All GPT-6 models (Luna, Sol, Astra) are reasoning models. `max_completion_tokens` includes hidden reasoning tokens.
+
+- **(a) Temperature fallback.** In `callChatCompletions`, when the response is HTTP 400 and the error message matches `/temperature/i`, retry the same request once without `temperature`.
+  - Remember the model in a module-level `Set` (`_noTemperatureModels`, keyed `` `${url}|${model}` ``) for the worker's lifetime, so later calls omit `temperature` from the start.
+  - Applies to openai, openrouter and custom.
+  - Streaming: the 400 arrives before any body streaming. Retry before reading the stream.
+  - Never retry on other 400s, and never more than once.
+- **(b) Token budget.** OpenAI `max_completion_tokens` goes from 4096 to `16_000` (constant `OPENAI_MAX_COMPLETION_TOKENS`). The other providers keep `MAX_TOKENS` 4096.
+- **Tests:**
+  1. A 400 `{error:{message:"Unsupported value: 'temperature' does not support 0.3 with this model. Only the default (1) value is supported."}}` is followed by a 200, and the second request body has no `temperature`.
+  2. The next call for the same url+model sends no `temperature` the first time.
+  3. A 400 with an unrelated message → no retry (fetch called once).
+  4. Two consecutive temperature 400s → rejects after 2 calls.
+  5. The OpenAI body has `max_completion_tokens: 16000`, and OpenRouter keeps `max_tokens: 4096`.
+
+### 11. Refresh stale default models and fallback lists
+Verified IDs (2026-10-22):
+- Anthropic API: `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-opus-5-5`.
+- OpenAI: `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`.
+- Gemini API (stable): `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.8-flash`.
+- OpenRouter: `openai/gpt-6-luna`, `anthropic/claude-sonnet-5.5`, `anthropic/claude-haiku-5.5`, `google/gemini-3.5-flash-lite`, `google/gemini-3.8-flash`.
+
+Changes:
+- **`DEFAULT_MODELS` in `lib/api-client.js`:**
+  - anthropic `claude-sonnet-5-5`;
+  - openai `gpt-6-luna`;
+  - openrouter `openai/gpt-6-luna`;
+  - google `gemini-3.5-flash-lite`.
+- **`PROVIDER_DEFAULT_MODELS` in `lib/storage.js`** gets the same values. It is used for the legacy migration; its google entry is currently `gemini-2.5-flash` and mismatched.
+- **`getAvailableModels` fallback lists:**
+  - anthropic: Sonnet 5.5, Haiku 5.5, Opus 5.5;
+  - openai: GPT-6 Luna, GPT-6 Sol, GPT-6.1 Sol, GPT-6 Astra, GPT-5.4 mini;
+  - google: Gemini 3.5 Flash-Lite, Gemini 3.6 Flash, Gemini 3.8 Flash;
+  - openrouter: replace the commercial entries with `anthropic/claude-sonnet-5.5`, `openai/gpt-6-luna`, `google/gemini-3.8-flash`, and keep the open-source entries as they are.
+- **Tests:** update any test that pins old defaults. Add one asserting `getDefaultModel` for each provider.
+- **Saved configs are untouched.** `closestModelId` only heals auto-filled values.
