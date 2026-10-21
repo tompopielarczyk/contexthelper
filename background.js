@@ -1,14 +1,18 @@
 import { getSettings, saveSettings, onSettingsChanged, isFirstRun, markInitialized } from './lib/storage.js';
 import { callAI } from './lib/api-client.js';
 import { sendWebhook, renderTemplate } from './lib/webhook.js';
+import { shouldStream, createThrottle, isRetryableError } from './lib/chat.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
 const FLOATING_MENU_ID = 'contexthelper-floating-toggle';
 const FLOATING_SCRIPT_ID = 'contexthelper-floating';
 
-let _requestId = 0;
 let _menuRebuildQueue = Promise.resolve();
+// tabId → { controller, requestId } of the run currently owning that tab
 const _abortControllersByTab = new Map();
+
+const CHUNK_THROTTLE_MS = 100;
+const KEEPALIVE_INTERVAL_MS = 20_000;
 
 // Must register listeners synchronously — survives service worker restarts
 chrome.contextMenus.onClicked.addListener(handleMenuClick);
@@ -20,6 +24,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === 'RUN_ACTION') {
     handleRunAction(message, sender);
+  }
+  if (message?.type === 'CANCEL_ACTION') {
+    handleCancelAction(message, sender);
+  }
+  if (message?.type === 'RETRY_RUN') {
+    handleRetryRun(message.retry, sender);
   }
 });
 
@@ -264,7 +274,7 @@ async function handleRunAction({ actionId, selectionText, editable }, sender) {
 // requestId set by AI_PROCESSING_START, so the notice needs the full pair.
 async function showTabNotice(tabId, message, settings) {
   if (!await ensureContentScript(tabId)) return;
-  const requestId = ++_requestId;
+  const requestId = crypto.randomUUID();
   const ok = await sendToTab(tabId, {
     type: 'AI_PROCESSING_START',
     requestId,
@@ -275,8 +285,40 @@ async function showTabNotice(tabId, message, settings) {
     type: 'AI_ERROR',
     requestId,
     message,
+    retry: null,
+    partialText: '',
     tooltipSettings: settings.tooltipSettings
   });
+}
+
+// Dismissal of the spinner or the streaming tooltip. Only the run the
+// content script was showing is aborted — a newer run on the tab is not.
+function handleCancelAction({ requestId }, sender) {
+  const entry = _abortControllersByTab.get(sender?.tab?.id);
+  if (entry && requestId && entry.requestId === requestId) entry.controller.abort();
+}
+
+// "↻ Retry" in the error tooltip — re-dispatch by the spec runChat attached
+// to AI_ERROR. Unknown kinds are ignored.
+async function handleRetryRun(retry, sender) {
+  const tab = sender?.tab;
+  if (!tab?.id || !retry || typeof retry !== 'object') return;
+
+  switch (retry.kind) {
+    case 'action': {
+      if (typeof retry.selectionText !== 'string' || !retry.selectionText.trim()) return;
+      const settings = await getSettings();
+      const action = (settings.actions || []).find(a => a.id === retry.actionId);
+      if (!action) {
+        await showTabNotice(tab.id, 'Action no longer exists', settings);
+        return;
+      }
+      await runAction(action, { selectionText: retry.selectionText, editable: !!retry.editable }, tab, settings);
+      return;
+    }
+    default:
+      return;
+  }
 }
 
 // Keep the registered content script in step with the opt-in list: the button
@@ -348,30 +390,10 @@ async function handleCommand(command, tab) {
   await runAction(action, { selectionText: selection.text, editable: selection.editable }, tab, settings);
 }
 
-// Shared AI flow — callers guarantee a non-empty selectionText
-async function runAction(action, { selectionText: selectedText, editable }, tab, settings) {
-  const requestId = ++_requestId;
-  const previousController = _abortControllersByTab.get(tab.id);
-  if (previousController) previousController.abort();
-
-  const controller = new AbortController();
-  _abortControllersByTab.set(tab.id, controller);
-  const signal = controller.signal;
-
-  let canReportToTab = false;
-
-  try {
-    const contentReady = await ensureContentScript(tab.id);
-    if (!contentReady) return;
-
-    // Notify content script: show loading indicator before spending tokens.
-    canReportToTab = await sendToTab(tab.id, {
-      type: 'AI_PROCESSING_START',
-      requestId,
-      tooltipSettings: settings.tooltipSettings
-    });
-    if (!canReportToTab) return;
-
+// Shared AI flow for text actions — callers guarantee a non-empty selectionText
+function runAction(action, { selectionText, editable }, tab, settings) {
+  const displayMode = action.displayMode || 'auto';
+  return runChat(tab, settings, async () => {
     const config = resolveModelConfig(settings.modelConfigs, action.modelConfigId);
     if (!config) {
       throw new Error('No model configured. Please add a model in the extension settings.');
@@ -385,21 +407,105 @@ async function runAction(action, { selectionText: selectedText, editable }, tab,
     if (isDeepL && !action.targetLang) {
       throw new Error('No target language set for this action. Please configure it in settings.');
     }
-    const prompt = isDeepL ? selectedText : action.template.replaceAll('{{text}}', selectedText);
+    const prompt = isDeepL ? selectionText : action.template.replaceAll('{{text}}', selectionText);
 
+    return {
+      config,
+      messages: isDeepL ? null : [{ role: 'user', content: prompt }],
+      prompt,
+      systemPrompt: isDeepL ? undefined : settings.systemPrompt,
+      targetLang: action.targetLang,
+      displayMode,
+      editable,
+      meta: { actionId: action.id, actionName: action.name, sourceText: selectionText }
+    };
+  }, { kind: 'action', actionId: action.id, selectionText, editable: !!editable });
+}
+
+/**
+ * Shared runner for every AI request shown in a tab: spinner, optional
+ * streaming into the tooltip, result or error. One run per tab — a new run
+ * aborts the previous one.
+ * @param {chrome.tabs.Tab} tab
+ * @param {object} settings  result of getSettings()
+ * @param {() => Promise<{ config, messages, prompt, systemPrompt, targetLang,
+ *   displayMode, editable, meta: { actionId, actionName, sourceText } }>} buildRequest
+ *   throws → AI_ERROR without retry (config problems a retry cannot fix)
+ * @param {object | null} retrySpec  attached to AI_ERROR when the AI call
+ *   itself failed with a retryable error
+ */
+async function runChat(tab, settings, buildRequest, retrySpec = null) {
+  const previous = _abortControllersByTab.get(tab.id);
+  if (previous) previous.controller.abort();
+
+  // UUIDs, not a counter: the content script outlives a worker restart and
+  // must never match a stale id from the previous worker
+  const requestId = crypto.randomUUID();
+  const controller = new AbortController();
+  _abortControllersByTab.set(tab.id, { controller, requestId });
+  const signal = controller.signal;
+  const tooltipSettings = settings.tooltipSettings;
+
+  let canReportToTab = false;
+  let aiCallStarted = false;
+  let partialText = '';
+  let throttle = null;
+  let keepalive = null;
+
+  try {
+    const contentReady = await ensureContentScript(tab.id);
+    if (!contentReady || signal.aborted) return;
+
+    // Notify content script: show loading indicator before spending tokens.
+    canReportToTab = await sendToTab(tab.id, {
+      type: 'AI_PROCESSING_START',
+      requestId,
+      tooltipSettings
+    });
+    if (!canReportToTab || signal.aborted) return;
+
+    const request = await buildRequest();
+    if (signal.aborted) return;
+
+    const { config, messages, prompt, systemPrompt, targetLang, displayMode, editable, meta } = request;
+    const isDeepL = config.provider === 'deepl';
+    const streaming = shouldStream({ provider: config.provider, displayMode, editable });
+    if (streaming) {
+      throttle = createThrottle(text => {
+        sendToTab(tab.id, { type: 'AI_CHUNK', requestId, text, tooltipSettings });
+      }, CHUNK_THROTTLE_MS);
+    }
+
+    // A long stream can outlive the idle limit of the service worker;
+    // extension API calls reset that timer
+    keepalive = setInterval(() => {
+      chrome.runtime.getPlatformInfo().catch(() => {});
+    }, KEEPALIVE_INTERVAL_MS);
+
+    aiCallStarted = true;
     const result = await callAI({
       provider: config.provider,
       apiKey: config.apiKey,
       model: config.model,
+      baseUrl: config.baseUrl,
       prompt,
-      systemPrompt: isDeepL ? undefined : settings.systemPrompt,
-      targetLang: action.targetLang,
-      signal
+      messages,
+      systemPrompt,
+      targetLang,
+      signal,
+      onDelta: streaming
+        ? (text) => {
+            partialText = text;
+            throttle.call(text);
+          }
+        : undefined
     });
 
     if (signal.aborted) return;
+    throttle?.flush();
+    throttle?.cancel();
 
-    const displayMode = action.displayMode || 'auto';
+    const conversationBase = messages?.length ? messages : [{ role: 'user', content: prompt }];
 
     await sendToTab(tab.id, {
       type: 'AI_RESULT',
@@ -407,30 +513,39 @@ async function runAction(action, { selectionText: selectedText, editable }, tab,
       text: result,
       editable,
       displayMode,
-      tooltipSettings: settings.tooltipSettings,
+      tooltipSettings,
+      actionId: meta.actionId,
+      sourceText: meta.sourceText,
+      // DeepL has no conversation to continue
+      conversation: isDeepL ? null : [...conversationBase, { role: 'assistant', content: result }],
       // Send-button data: names only for the menu, payload fields for SEND_WEBHOOK
       // (timestamp is stamped by the background at delivery time)
       webhooks: (settings.webhooks || []).map(w => ({ id: w.id, name: w.name })),
       webhookData: {
         result,
-        actionName: action.name,
-        sourceText: selectedText,
+        actionName: meta.actionName,
+        sourceText: meta.sourceText,
         pageUrl: tab?.url || '',
         pageTitle: tab?.title || '',
         modelUsed: isDeepL ? 'deepl' : (config.model || '')
       }
     });
   } catch (err) {
+    // Never flush here: a late chunk after AI_ERROR would re-open the stream view
+    throttle?.cancel();
     if (signal.aborted) return;
     if (!canReportToTab) return;
     await sendToTab(tab.id, {
       type: 'AI_ERROR',
       requestId,
-      message: err.message || 'An unknown error occurred',
-      tooltipSettings: settings.tooltipSettings
+      message: err?.message || 'An unknown error occurred',
+      partialText,
+      retry: aiCallStarted && isRetryableError(err) ? retrySpec : null,
+      tooltipSettings
     });
   } finally {
-    if (_abortControllersByTab.get(tab.id)?.signal === signal) {
+    clearInterval(keepalive);
+    if (_abortControllersByTab.get(tab.id)?.controller === controller) {
       _abortControllersByTab.delete(tab.id);
     }
   }
