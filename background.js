@@ -273,6 +273,13 @@ async function handleRunAction({ actionId, selectionText, editable }, sender) {
 // Error tooltip outside the AI flow — content.js gates AI_ERROR on the
 // requestId set by AI_PROCESSING_START, so the notice needs the full pair.
 async function showTabNotice(tabId, message, settings) {
+  // The notice replaces whatever the tab shows — stop a run still in flight
+  // there, or it keeps spending tokens for a result nobody will see
+  const running = _abortControllersByTab.get(tabId);
+  if (running) {
+    running.controller.abort();
+    _abortControllersByTab.delete(tabId);
+  }
   if (!await ensureContentScript(tabId)) return;
   const requestId = crypto.randomUUID();
   const ok = await sendToTab(tabId, {

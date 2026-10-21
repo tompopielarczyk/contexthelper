@@ -252,13 +252,20 @@
     const label = document.createElement('span');
     label.textContent = 'Processing...';
 
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cmn-btn cmn-btn-close cmn-loading-close';
+    closeBtn.textContent = '\u2715';
+    closeBtn.title = 'Cancel';
+    closeBtn.addEventListener('click', cancelActiveRun);
+
     el.appendChild(spinner);
     el.appendChild(label);
+    el.appendChild(closeBtn);
     appendAndClampOverlay(el, pos);
 
-    // Esc cancels the run (no close button or outside click: a click elsewhere
-    // while waiting should not throw the request away)
+    // Esc, ✕ or a click outside cancels the run
     addEscHandler(cancelActiveRun);
+    addOutsideClickHandler(cancelActiveRun);
   }
 
   function addEscHandler(onEscape) {
@@ -1342,6 +1349,13 @@
 
       .cmn-btn-close:hover {
         color: #4b5563;
+      }
+
+      /* In the spinner pill the close button sits in the flex row */
+      .cmn-btn-close.cmn-loading-close {
+        position: static;
+        margin-left: 2px;
+        font-size: 13px;
       }
 
       .cmn-send-wrap {
