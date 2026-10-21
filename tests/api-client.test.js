@@ -452,3 +452,65 @@ test('fetchAvailableModels for custom reads data[].id from base/models', async (
   assert.equal('Authorization' in calls[0].options.headers, false);
   assert.deepEqual(models.map(m => m.id), ['llama3', 'qwen2.5']);
 });
+
+// ── Non-streaming body reads keep cancellation and the request deadline ──
+
+// Headers arrive, then the JSON body stalls forever
+function stalledJSONResponse() {
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(encoder.encode('{"choi')); }
+  });
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+test('non-streaming custom call: abort after headers rejects with AbortError', async (t) => {
+  const controller = new AbortController();
+  stubFetch(t, () => {
+    setTimeout(() => controller.abort(), 10);
+    return stalledJSONResponse();
+  });
+  await assert.rejects(
+    callAI({ provider: 'custom', baseUrl: 'http://localhost:11434/v1', apiKey: '', model: 'm', prompt: 'p', signal: controller.signal }),
+    (err) => err.name === 'AbortError'
+  );
+});
+
+test('non-streaming openai call: abort after headers rejects with AbortError', async (t) => {
+  const controller = new AbortController();
+  stubFetch(t, () => {
+    setTimeout(() => controller.abort(), 10);
+    return stalledJSONResponse();
+  });
+  await assert.rejects(
+    callAI({ provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p', signal: controller.signal }),
+    (err) => err.name === 'AbortError'
+  );
+});
+
+test('DeepL translate: abort after headers rejects with AbortError', async (t) => {
+  const controller = new AbortController();
+  stubFetch(t, () => {
+    setTimeout(() => controller.abort(), 10);
+    return stalledJSONResponse();
+  });
+  await assert.rejects(
+    callAI({ provider: 'deepl', apiKey: 'k:fx', prompt: 'p', targetLang: 'DE', signal: controller.signal }),
+    (err) => err.name === 'AbortError'
+  );
+});
+
+test('non-streaming body stall past the request deadline rejects as timed out', async (t) => {
+  stubFetch(t, () => stalledJSONResponse());
+  await assert.rejects(
+    callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', requestTimeoutMs: 30 }),
+    /timed out/
+  );
+});
+
+test('non-streaming error status still surfaces the body message', async (t) => {
+  stubFetch(t, () => new Response(JSON.stringify({ error: { message: 'model not found' } }), { status: 404 }));
+  await assert.rejects(
+    callAI({ provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p' }),
+    /model not found/
+  );
+});
