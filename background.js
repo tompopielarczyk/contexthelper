@@ -6,7 +6,7 @@ import {
   ASK_ACTION_ID, pickLLMConfig, resolveActionConfig, sanitizeConversation, buildRefineMessages,
   resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError, nextChunk
 } from './lib/chat.js';
-import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars } from './lib/prompt.js';
+import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars, collapseWhitespace } from './lib/prompt.js';
 import { probeSelection, SELECTION_RULES } from './lib/page-probe.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
@@ -853,12 +853,17 @@ async function getSelectionFromTab(tabId) {
  * Restricted pages fall back to '' context and the tab's title/url; a
  * sensitive field gives '' context.
  */
+function windowAroundCollapsed(text, start, end) {
+  const c = collapseWhitespace(text, start, end);
+  return windowAround(c.text, c.start, c.end);
+}
+
 async function getPageContext(tab) {
   const fallback = { context: '', pageTitle: tab.title || '', pageUrl: tab.url || '' };
   const r = await runSelectionProbe(tab.id, { withContext: true });
   if (!r) return fallback;
   return {
-    context: r.blockText ? windowAround(r.blockText, r.start, r.end) : '',
+    context: r.blockText ? windowAroundCollapsed(r.blockText, r.start, r.end) : '',
     pageTitle: r.title || fallback.pageTitle,
     pageUrl: r.url || fallback.pageUrl
   };

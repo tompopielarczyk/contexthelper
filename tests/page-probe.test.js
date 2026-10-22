@@ -269,3 +269,73 @@ test('text controls, contenteditable and fields inside open shadow roots are ins
   withPage(t, { activeElement: { tagName: 'BODY', isContentEditable: false }, selection });
   assert.equal(injected(SELECTION_RULES, false).inspected, false);
 });
+
+// ── Short blocks grow with their sibling text blocks ──────────────────
+
+/** Sibling element stub: `visible` false = no client rects (display:none). */
+function sib(tagName, textContent, visible = true) {
+  return { nodeType: 1, tagName, textContent, getClientRects: () => (visible ? [{}] : []) };
+}
+
+/** Gives `core` the siblings `before` (nearest last) and `after` (nearest first). */
+function chain(core, before, after) {
+  const all = [...before, core, ...after];
+  all.forEach((el, i) => {
+    el.previousElementSibling = all[i - 1] || null;
+    el.nextElementSibling = all[i + 1] || null;
+  });
+}
+
+function shortParagraph(t, text, start, end, before, after) {
+  const { block, selection } = pageSelection(text, start, end);
+  Object.assign(block, { tagName: 'P', getClientRects: () => [{}] });
+  chain(block, before, after);
+  withPage(t, { activeElement: { tagName: 'BODY', isContentEditable: false }, selection, body: block });
+  return injected(SELECTION_RULES, true);
+}
+
+test('a short paragraph takes in neighbouring text blocks, nearest first', (t) => {
+  const core = 'It is possible to fine-tune quantized models.';
+  const r = shortParagraph(t, core, 6, 14,
+    [sib('P', '  Earlier paragraph about quantization.  '), sib('FIGURE', 'Figure caption noise')],
+    [sib('UL', 'nav'), sib('LI', 'A list item that follows.'), sib('P', 'Hidden text', false), sib('BLOCKQUOTE', 'A quote.')]);
+  assert.equal(r.blockText, [
+    'Earlier paragraph about quantization.', core, 'A list item that follows.', 'A quote.'
+  ].join('\n\n'));
+  assert.equal(r.blockText.slice(r.start, r.end), 'possible');
+  assert.equal(r.text, 'possible');
+});
+
+test('a heading ends the walk in its direction', (t) => {
+  const core = 'Short core text.';
+  const r = shortParagraph(t, core, 0, 5,
+    [sib('P', 'Previous section text.'), sib('H2', 'Section title')],
+    [sib('P', 'Next paragraph.'), sib('H3', 'Next section'), sib('P', 'Beyond the heading.')]);
+  assert.equal(r.blockText, `${core}\n\nNext paragraph.`);
+  assert.deepEqual([r.start, r.end], [0, 5]);
+});
+
+test('a block of 600+ characters is not expanded', (t) => {
+  const core = 'x'.repeat(650);
+  const r = shortParagraph(t, core, 10, 20, [sib('P', 'before')], [sib('P', 'after')]);
+  assert.equal(r.blockText, core);
+  assert.deepEqual([r.start, r.end], [10, 20]);
+});
+
+test('expansion stops once about 1500 characters are gathered', (t) => {
+  const para = n => sib('P', String(n).repeat(400));
+  const r = shortParagraph(t, 'core text', 0, 4, [para(1), para(2), para(3)], [para(4), para(5), para(6)]);
+  const parts = r.blockText.split('\n\n');
+  // core + next + previous + next + previous would pass 1500 at the fourth block
+  assert.equal(parts.length, 5);
+  assert.ok(r.blockText.length >= 1500 && r.blockText.length < 2000);
+  assert.equal(r.blockText.slice(r.start, r.end), 'core');
+});
+
+test('only paragraph-like blocks grow (a div or table cell stays as is)', (t) => {
+  const { block, selection } = pageSelection('cell text', 0, 4);
+  Object.assign(block, { tagName: 'TD', getClientRects: () => [{}] });
+  chain(block, [sib('TD', 'left')], [sib('TD', 'right')]);
+  withPage(t, { activeElement: { tagName: 'BODY', isContentEditable: false }, selection, body: block });
+  assert.equal(injected(SELECTION_RULES, true).blockText, 'cell text');
+});
