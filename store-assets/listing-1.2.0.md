@@ -4,22 +4,31 @@ Paste-ready texts for the Developer Dashboard. Package: `contexthelper-1.2.0.zip
 
 ## Store listing → Description
 
-ContextHelper runs AI actions on the text you select, right where you read and write. Right-click a selection (or press a shortcut) and translate, fix grammar, improve your writing, explain, summarize or quote it with its source. Results stream into a tooltip you can refine, or replace the selected text directly in input fields.
+Keep brand names to one short sentence: the first 1.2.0 submission was rejected as keyword spam ("Yellow Argon") for a long provider list with parenthetical extras.
 
-Bring your own AI provider:
-• Anthropic (Claude), OpenAI (GPT), Google Gemini, OpenRouter (hundreds of models) and DeepL
-• Local and self-hosted models through any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM)
-• Live model lists from each provider and a per-model Reasoning effort setting
+ContextHelper turns any text you select into an AI action: translate it, summarize it, fix the grammar, improve your writing, explain it, or anything else you define yourself with a custom prompt.
 
-Built for daily use:
-• Your own actions with custom prompts, reorderable by drag and drop
-• Streaming answers with Refine: Shorter, Longer, Simpler, or a follow-up question
-• Ask about selection: type any question about the selected text
-• Page context: let an action see the paragraphs around your selection, the page title and URL
-• Up to four keyboard shortcuts, an optional floating button on chosen sites, webhooks to send results to Notion, n8n or any API
-• Light and dark theme, resizable result tooltip
+Bring your own key. ContextHelper works with the AI service you already use, such as Claude, ChatGPT, Gemini or DeepL, and with models running on your own computer. Your API keys stay in your browser, and the text goes directly from your browser to the provider you chose. No middleman server, no account, no tracking.
 
-Private by design: your API keys stay in your browser, text goes only to the provider you chose, and nothing is collected by the extension author. No analytics, no tracking.
+Three ways to trigger an action:
+- Right-click a selection and pick an action from the ContextHelper menu
+- Keyboard shortcuts (up to 4 configurable slots)
+- An optional floating button next to your selection, only on the sites you enable it for
+
+Or choose "Ask about selection" and type any question about the selected text.
+
+Results your way. Each action can replace the selected text in place (great in editors and text fields) or stream the answer into a clean tooltip with a copy button. Not quite right? Refine it with one click (Shorter, Longer, Simpler) or a follow-up question. The tooltip is resizable and remembers its size.
+
+Page context. Tick it on an action and the model also sees the paragraphs around your selection, the page title and URL, so translations and explanations fit the page.
+
+Webhooks. Send any result to your own automations with a fully customizable JSON payload, with one click from the result tooltip.
+
+Privacy-first by design:
+- No analytics, no telemetry, no ads
+- API keys stored locally, never synced, sent only to the provider you configured
+- Page content is sent only for actions where you enable Page context; password and payment fields are never read
+- Site access is opt-in: per domain for the floating button, all sites only if you turn that on
+- Open source: https://github.com/tompopielarczyk/contexthelper
 
 ## What's new in 1.2.0 (optional, for the description or release notes)
 
