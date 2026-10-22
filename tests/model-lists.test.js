@@ -60,6 +60,19 @@ test('google: a repeated nextPageToken ends the loop, duplicate ids are dropped'
   assert.deepEqual(ids(models), ['gemini-x']);
 });
 
+test('a cursor cycle (A, B, A) ends the loop for anthropic and google', async (t) => {
+  const cursors = ['A', 'B', 'A', 'B', 'A'];
+  const anth = stubFetch(t, (_u, _o, n) => json({ data: [{ id: `m${cursors[n - 1]}` }], has_more: true, last_id: cursors[n - 1] }));
+  assert.deepEqual(ids(await fetchAvailableModels('anthropic', 'k')), ['mA', 'mB']);
+  assert.equal(anth.length, 3);
+  const goog = stubFetch(t, (_u, _o, n) => json({
+    models: [{ name: `models/gemini-${cursors[n - 1]}`, supportedGenerationMethods: ['generateContent'] }],
+    nextPageToken: cursors[n - 1]
+  }));
+  assert.deepEqual(ids(await fetchAvailableModels('google', 'k')), ['gemini-A', 'gemini-B']);
+  assert.equal(goog.length, 3);
+});
+
 test('anthropic: has_more without last_id ends the loop', async (t) => {
   const calls = stubFetch(t, () => json({ data: [{ id: 'x' }], has_more: true }));
   await fetchAvailableModels('anthropic', 'k');
