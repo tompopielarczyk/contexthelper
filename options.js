@@ -379,6 +379,8 @@ function addModelConfigCard(config) {
   // A Test that finished after the card changed confirms nothing.
   const markVerified = (testedTuple) => {
     if (testedTuple !== cardTuple()) return;
+    // A confirmed model is the user's choice — the live list must not swap it
+    modelAutoFilled = false;
     listState.verified = testedTuple;
     modelWarn.hidden = true;
     refreshModels(true);
