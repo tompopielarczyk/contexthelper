@@ -1419,6 +1419,11 @@ async function onSave() {
   try {
     await saveSettings({ modelConfigs, webhooks, actions, tooltipSettings, floatingButtonSettings, systemPrompt, darkMode });
     persistThemeBootValue(darkMode);
+    // The stored target language changed — later re-renders must not bring back the old one
+    for (const card of actionsList.querySelectorAll('.action-card')) {
+      const langState = targetLangStates.get(card);
+      if (langState) langState.saved = card.querySelector('.action-target-lang').value;
+    }
     floatingAllSitesStored = floatingButtonSettings.allSites;
     syncFloatingVisibility();
     const granted = await permissionsPromise;
