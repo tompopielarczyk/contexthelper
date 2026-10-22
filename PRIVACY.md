@@ -1,6 +1,6 @@
 # ContextHelper — Privacy Policy
 
-_Last updated: 2026-10-21_
+_Last updated: 2026-10-22_
 
 ContextHelper is a browser extension that runs AI-powered actions (translation, summarization, rewriting, etc.) on text you select on a web page, using AI providers **you** configure with **your own** API keys.
 
