@@ -477,9 +477,31 @@ body {
   border-style: dashed;
 }
 
-.action-card.drag-over {
-  border-color: var(--orange-400);
-  background: var(--orange-50);
+/* Drop indicator: a bar in the gap above or below the target card */
+.action-card {
+  position: relative;
+}
+
+.action-card.drop-before::before,
+.action-card.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--orange-500);
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.2);
+  pointer-events: none;
+}
+
+/* The list gap is 10px: centre the bar in it */
+.action-card.drop-before::before {
+  top: -7px;
+}
+
+.action-card.drop-after::after {
+  bottom: -7px;
 }
 
 .action-drag-handle {

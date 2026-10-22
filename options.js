@@ -79,6 +79,7 @@ async function init() {
   // Tabs
   initTabs();
   initPlaceholderChips();
+  initActionDragAndDrop();
 
   // Dark mode (tri-state: 'auto' | 'light' | 'dark')
   darkModeState = settings.darkMode || 'auto';
@@ -1088,10 +1089,6 @@ function addActionCard(action) {
 
   card.addEventListener('dragstart', onDragStart);
   card.addEventListener('dragend', onDragEnd);
-  card.addEventListener('dragover', onDragOver);
-  card.addEventListener('dragenter', onDragEnter);
-  card.addEventListener('dragleave', onDragLeave);
-  card.addEventListener('drop', onDrop);
 
   actionsList.appendChild(card);
 }
@@ -1105,52 +1102,62 @@ function onDragStart(e) {
   e.dataTransfer.setData('text/plain', '');
 }
 
+function clearDropIndicator() {
+  for (const card of actionsList.querySelectorAll('.drop-before, .drop-after')) {
+    card.classList.remove('drop-before', 'drop-after');
+  }
+}
+
 function onDragEnd() {
   if (draggedCard) {
     draggedCard.classList.remove('dragging');
     draggedCard = null;
   }
-  for (const card of actionsList.querySelectorAll('.drag-over')) {
-    card.classList.remove('drag-over');
-  }
+  clearDropIndicator();
 }
 
-function onDragOver(e) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
+// Where the dragged card would land for a pointer at `clientY`: before the
+// first other card whose middle is below the pointer, else after the last
+// one. Null when the drop would leave the order unchanged.
+function dropTarget(clientY) {
+  if (!draggedCard) return null;
+  const others = [...actionsList.children].filter(c => c !== draggedCard);
+  if (!others.length) return null;
+  const below = others.find(c => {
+    const rect = c.getBoundingClientRect();
+    return clientY < rect.top + rect.height / 2;
+  });
+  const target = below
+    ? { card: below, position: 'before' }
+    : { card: others[others.length - 1], position: 'after' };
+  const unchanged = target.position === 'before'
+    ? target.card.previousElementSibling === draggedCard
+    : target.card.nextElementSibling === draggedCard;
+  return unchanged ? null : target;
 }
 
-function onDragEnter(e) {
-  e.preventDefault();
-  const card = e.currentTarget;
-  if (card !== draggedCard) {
-    card.classList.add('drag-over');
-  }
-}
-
-function onDragLeave(e) {
-  const card = e.currentTarget;
-  if (!card.contains(e.relatedTarget)) {
-    card.classList.remove('drag-over');
-  }
-}
-
-function onDrop(e) {
-  e.preventDefault();
-  const targetCard = e.currentTarget;
-  targetCard.classList.remove('drag-over');
-
-  if (!draggedCard || targetCard === draggedCard) return;
-
-  const cards = [...actionsList.children];
-  const dragIdx = cards.indexOf(draggedCard);
-  const dropIdx = cards.indexOf(targetCard);
-
-  if (dragIdx < dropIdx) {
-    actionsList.insertBefore(draggedCard, targetCard.nextSibling);
-  } else {
-    actionsList.insertBefore(draggedCard, targetCard);
-  }
+// One set of list-level listeners: the gaps between cards count too
+function initActionDragAndDrop() {
+  actionsList.addEventListener('dragover', (e) => {
+    if (!draggedCard) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const target = dropTarget(e.clientY);
+    if (target && target.card.classList.contains(`drop-${target.position}`)) return;
+    clearDropIndicator();
+    if (target) target.card.classList.add(`drop-${target.position}`);
+  });
+  actionsList.addEventListener('dragleave', (e) => {
+    if (!actionsList.contains(e.relatedTarget)) clearDropIndicator();
+  });
+  actionsList.addEventListener('drop', (e) => {
+    if (!draggedCard) return;
+    e.preventDefault();
+    const target = dropTarget(e.clientY);
+    clearDropIndicator();
+    if (!target) return;
+    actionsList.insertBefore(draggedCard, target.position === 'before' ? target.card : target.card.nextSibling);
+  });
 }
 
 // ── Floating Button ─────────────────────────────────
