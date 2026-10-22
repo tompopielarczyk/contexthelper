@@ -205,6 +205,16 @@ body {
   font-size: 13px;
 }
 
+/* Room for the ↻ reload button inside the field */
+.input-group .input-model {
+  padding-right: 44px;
+}
+
+.model-config-refresh:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
 .input-key {
   font-family: var(--font-mono);
   font-size: 13px;

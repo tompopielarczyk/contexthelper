@@ -749,13 +749,16 @@ test('getDefaultModel per provider', () => {
 
 test('fallback model lists carry the current models and include each default', () => {
   const ids = (provider) => getAvailableModels(provider).map(m => m.id);
-  assert.deepEqual(ids('anthropic'), ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5']);
+  assert.deepEqual(ids('anthropic'), ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5', 'claude-fable-5-1']);
   assert.deepEqual(ids('openai'), ['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.4-mini']);
-  assert.deepEqual(ids('google'), ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash']);
+  assert.deepEqual(ids('google'), ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-4-argon']);
   const openrouter = ids('openrouter');
-  assert.deepEqual(openrouter.slice(0, 3), ['anthropic/claude-sonnet-5.5', 'openai/gpt-6-luna', 'google/gemini-3.8-flash']);
+  assert.deepEqual(openrouter.slice(0, 5), ['anthropic/claude-sonnet-5.5', 'anthropic/claude-opus-5.5', 'openai/gpt-6-luna', 'google/gemini-3.8-flash', 'google/gemini-4-argon']);
   assert.ok(openrouter.includes('deepseek/deepseek-v3.2') && openrouter.includes('stepfun/step-3.5-flash'));
-  assert.equal(openrouter.length, 11);
+  // IDs that dropped off OpenRouter's live list (checked 2026-10-22)
+  for (const gone of ['deepseek/deepseek-r1', 'qwen/qwen3-235b-a22b-instruct-2507', 'nvidia/nemotron-3-super'])
+    assert.ok(!openrouter.includes(gone), gone);
+  assert.equal(openrouter.length, 13);
   for (const provider of ['anthropic', 'openai', 'openrouter', 'google'])
     assert.ok(ids(provider).includes(getDefaultModel(provider)), provider);
 });

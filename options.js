@@ -2,6 +2,7 @@ import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings
 import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, normalizeBaseUrl, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
 import { testWebhook, requestWebhookPermission, requestOriginPermissions, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
+import { shouldWarnUnknownModel, modelCacheKey, keyFingerprint } from './lib/model-list.js';
 
 // ── DOM refs ────────────────────────────────────────
 const modelConfigsList = document.getElementById('modelConfigsList');
@@ -283,6 +284,7 @@ function addModelConfigCard(config) {
   const modelDatalist = card.querySelector('.model-config-datalist');
   const modelHint = card.querySelector('.model-config-model-hint');
   const modelWarn = card.querySelector('.model-config-model-warn');
+  const refreshBtn = card.querySelector('.model-config-refresh');
   const apiKeyInput = card.querySelector('.model-config-apikey');
   const apiKeyLabel = card.querySelector('.model-config-apikey-label');
   const baseUrlField = card.querySelector('.model-config-baseurl');
@@ -307,23 +309,53 @@ function addModelConfigCard(config) {
   // only then may a stale default be swapped for the closest live model
   let modelAutoFilled = !config.model;
 
-  // Flag models missing from the current list (retired defaults, typos) before Test/save.
-  // Non-blocking — custom IDs newer than the list are legitimate.
+  // Live-list state of this card: `seq` drops superseded list work, `source`
+  // says what the datalist holds ('builtin' never warns), `verified` is the
+  // provider|key|baseUrl|model tuple a successful Test confirmed
+  const listState = { seq: 0, source: 'builtin', verified: null };
+  const cardTuple = () => JSON.stringify([
+    providerSelect.value, apiKeyInput.value.trim(), baseUrlInput.value.trim(), modelInput.value.trim()
+  ]);
+  // A Test result also depends on the effort it sent
+  const testTuple = () => JSON.stringify([cardTuple(), effortSelect.value]);
+  effortSelect.addEventListener('change', () => {
+    testResult.hidden = true;
+  });
+
+  // Flag models missing from the provider's live list (retired IDs, typos) before
+  // Test/save. Non-blocking, and never against the dated built-in list.
   const validateModel = () => {
     const value = modelInput.value.trim();
     const ids = Array.from(modelDatalist.options, o => o.value);
-    const unknown = Boolean(value) && ids.length > 0 && !ids.includes(value);
+    const unknown = shouldWarnUnknownModel(value, ids, listState.source, listState.verified === cardTuple());
     modelWarn.hidden = !unknown;
     if (unknown) {
-      modelWarn.textContent = `⚠ "${value}" is not on this provider's model list — it may be retired or misspelled`;
+      const providerName = providerSelect.selectedOptions[0]?.textContent.trim() || providerSelect.value;
+      modelWarn.textContent = `⚠ "${value}" is not on the list returned by ${providerName} — check the ID`;
     }
   };
   // No validation mid-typing — warn only once editing is done (change/blur)
   modelInput.addEventListener('input', () => {
     modelAutoFilled = false;
+    listState.verified = null;
     modelWarn.hidden = true;
+    testResult.hidden = true;
   });
   modelInput.addEventListener('change', validateModel);
+
+  // A provider, key or base URL edit makes the shown list and any Test result
+  // belong to another identity: drop in-flight list work at once (the refetch
+  // may be debounced) and stop warning against the old list
+  const invalidateModelList = () => {
+    listState.seq++;
+    listState.source = 'builtin';
+    listState.verified = null;
+    modelWarn.hidden = true;
+    testResult.hidden = true;
+    // Swap the old identity's list for the built-in one (custom: the
+    // placeholder) right away — the refetch may still be debounced
+    refreshModels(false, { renderOnly: true });
+  };
 
   const onListUpdate = () => {
     const ids = Array.from(modelDatalist.options, o => o.value);
@@ -334,9 +366,39 @@ function addModelConfigCard(config) {
     if (document.activeElement !== modelInput) validateModel();
   };
 
-  const refreshModels = (forceFetch) =>
-    populateModelDatalist(modelDatalist, modelHint, providerSelect.value, apiKeyInput.value.trim(), forceFetch, onListUpdate, baseUrlInput.value.trim());
+  const refreshModels = (forceFetch, { renderOnly = false } = {}) => populateModelDatalist({
+    datalist: modelDatalist,
+    hintEl: modelHint,
+    state: listState,
+    provider: providerSelect.value,
+    apiKey: apiKeyInput.value.trim(),
+    baseUrl: baseUrlInput.value.trim(),
+    forceFetch,
+    renderOnly,
+    onUpdate: onListUpdate
+  });
   refreshModels(false);
+
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    try {
+      await refreshModels(true);
+    } finally {
+      refreshBtn.disabled = false;
+    }
+  });
+
+  // Test calls this with the tuple captured at click. A confirmed model never
+  // warns, and the key that just worked may unlock (or change) the live list.
+  // A Test that finished after the card changed confirms nothing.
+  const markVerified = (testedTuple) => {
+    if (testedTuple !== cardTuple()) return;
+    // A confirmed model is the user's choice — the live list must not swap it
+    modelAutoFilled = false;
+    listState.verified = testedTuple;
+    modelWarn.hidden = true;
+    refreshModels(true);
+  };
 
   // DeepL has no model — hide the whole Model field; only custom has a base
   // URL, and its key is optional (local servers need none)
@@ -351,6 +413,7 @@ function addModelConfigCard(config) {
   syncProviderFields();
 
   providerSelect.addEventListener('change', () => {
+    invalidateModelList();
     if (providerSelect.value !== 'deepl') {
       modelInput.value = getDefaultModel(providerSelect.value);
       modelAutoFilled = true;
@@ -367,8 +430,12 @@ function addModelConfigCard(config) {
     clearTimeout(modelFetchTimer);
     modelFetchTimer = setTimeout(() => refreshModels(true), 600);
   };
-  apiKeyInput.addEventListener('input', scheduleModelRefetch);
-  baseUrlInput.addEventListener('input', scheduleModelRefetch);
+  const onIdentityInput = () => {
+    invalidateModelList();
+    scheduleModelRefetch();
+  };
+  apiKeyInput.addEventListener('input', onIdentityInput);
+  baseUrlInput.addEventListener('input', onIdentityInput);
 
   toggleKeyBtn.addEventListener('click', () => {
     const isPassword = apiKeyInput.type === 'password';
@@ -379,8 +446,18 @@ function addModelConfigCard(config) {
   testBtn.addEventListener('click', async () => {
     const btnText = testBtn.querySelector('.btn-text');
     const btnSpinner = testBtn.querySelector('.btn-spinner');
+    // Snapshot the whole request before any await — the permission prompt and
+    // the call itself take time, and the card may be edited meanwhile
     const provider = providerSelect.value;
     const apiKey = apiKeyInput.value.trim();
+    const model = modelInput.value.trim();
+    const effort = effortSelect.value;
+    const testedTuple = cardTuple();
+    const testedRequest = testTuple();
+    // A result for a request the card no longer shows (identity, model or effort edited) is not rendered
+    const showResult = (message, success) => {
+      if (testedRequest === testTuple()) showTestResultInCard(testResult, message, success);
+    };
 
     // Custom endpoints need a runtime grant for their origin. Request it
     // before any await — chrome.permissions.request needs the click gesture.
@@ -395,7 +472,7 @@ function addModelConfigCard(config) {
         showTestResultInCard(testResult, err.message, false);
         return;
       }
-      if (!modelInput.value.trim()) {
+      if (!model) {
         showTestResultInCard(testResult, 'Enter a model ID', false);
         return;
       }
@@ -412,29 +489,27 @@ function addModelConfigCard(config) {
 
     try {
       if (provider === 'custom' && !await grantedPromise) {
-        showTestResultInCard(testResult, `Permission for ${origin} denied`, false);
+        showResult(`Permission for ${origin} denied`, false);
         return;
       }
       if (provider === 'deepl') {
         const usage = await getDeepLUsage(apiKey);
         const fmt = n => n.toLocaleString('pl-PL');
-        showTestResultInCard(testResult, `Connection OK — ${fmt(usage.characterCount)} / ${fmt(usage.characterLimit)} characters used`, true);
+        showResult(`Connection OK — ${fmt(usage.characterCount)} / ${fmt(usage.characterLimit)} characters used`, true);
       } else {
-        const model = modelInput.value.trim();
         await callAI({
           provider,
           apiKey,
           model,
           baseUrl,
-          effort: effortSelect.value,
+          effort,
           prompt: 'Say OK'
         });
-        showTestResultInCard(testResult, 'Connection OK', true);
-        // The origin grant may have just unlocked the endpoint's model list
-        if (provider === 'custom') refreshModels(true);
+        showResult('Connection OK', true);
+        markVerified(testedTuple);
       }
     } catch (err) {
-      showTestResultInCard(testResult, err.message, false);
+      showResult(err.message, false);
     } finally {
       btnText.textContent = 'Test';
       btnSpinner.hidden = true;
@@ -491,14 +566,41 @@ function closestModelId(target, ids) {
   return best;
 }
 
-// Fill the datalist: static list immediately, cached live list if present,
-// then a background refetch when the cache is stale/missing (or forceFetch).
-async function populateModelDatalist(datalist, hintEl, provider, apiKey, forceFetch, onUpdate, baseUrl) {
-  if (provider === 'deepl') return;
-  const seq = (datalist._seq = (datalist._seq || 0) + 1);
+// Cache keys whose live list was fetched during this page session — their
+// cached copy is as good as live, so only forceFetch fetches them again. A
+// cache key already names the whole list identity (provider + key
+// fingerprint, openrouter, custom base URL + key fingerprint).
+const liveFetchedModelLists = new Set();
 
-  const setList = (models, label) => {
-    if (datalist._seq !== seq) return;
+// Strictly increasing fetch-start stamps, tagged with this page's session id:
+// the cache drops a list whose fetch started before the stored one's in the
+// same session (an older request that finished last); another session's
+// stamps are not comparable, so its entries are always replaced
+const MODEL_FETCH_SESSION_ID = crypto.randomUUID();
+let lastModelFetchStamp = 0;
+const nextModelFetchStamp = () => (lastModelFetchStamp = Math.max(Date.now(), lastModelFetchStamp + 1));
+
+// Fill a card's datalist, stale-while-revalidate: the built-in list at once,
+// then the cached list for this key, then a live fetch — always on the first
+// run per cache key in this page session, and on every forceFetch (↻, key
+// edit, successful Test). `state` is the card's listState: each run takes a
+// new `seq` (the card also bumps it on provider/key/base-URL edits), and a
+// superseded run never touches the list, the hint or `state.source`.
+// `renderOnly` stops after the built-in list (an identity edit whose refetch
+// is still debounced must not keep offering the old key's list).
+async function populateModelDatalist({ datalist, hintEl, state, provider, apiKey, baseUrl, forceFetch, onUpdate, renderOnly }) {
+  const seq = ++state.seq;
+  const isCurrent = () => state.seq === seq;
+  if (provider === 'deepl') return;
+
+  const setHint = (label, title = '') => {
+    if (!isCurrent()) return;
+    hintEl.textContent = label;
+    hintEl.title = title;
+    hintEl.hidden = false;
+  };
+  const setList = (models, label, source) => {
+    if (!isCurrent()) return;
     datalist.textContent = '';
     for (const m of models) {
       const opt = document.createElement('option');
@@ -506,40 +608,74 @@ async function populateModelDatalist(datalist, hintEl, provider, apiKey, forceFe
       if (m.name && m.name !== m.id) opt.label = m.name;
       datalist.appendChild(opt);
     }
-    hintEl.textContent = label;
-    hintEl.hidden = false;
+    state.source = source;
+    setHint(label);
     if (onUpdate) onUpdate();
   };
 
   // A custom endpoint has no built-in list; its live list is cached per base URL
-  let cacheKey = provider;
+  let normalizedBaseUrl = '';
   if (provider === 'custom') {
     try {
-      cacheKey = `custom:${normalizeBaseUrl(baseUrl)}`;
+      normalizedBaseUrl = normalizeBaseUrl(baseUrl);
     } catch {
-      setList([], 'Enter a valid base URL to load the model list');
+      setList([], 'Enter a valid base URL to load the model list', 'builtin');
       return;
     }
-    setList([], 'No model list yet — type the model ID');
+    setList([], 'No model list yet — type the model ID', 'builtin');
   } else {
-    setList(getAvailableModels(provider), 'Built-in list');
+    setList(getAvailableModels(provider), 'Built-in list', 'builtin');
+  }
+  if (renderOnly) return;
+
+  // OpenRouter's list is public; local custom servers usually need no key.
+  // The others are cached per key fingerprint — a key may see its own models
+  // (a custom endpoint too, when it has a key).
+  const keyRequired = provider !== 'openrouter' && provider !== 'custom';
+  if (keyRequired && !apiKey) return;
+  const hashKey = provider !== 'openrouter' && Boolean(apiKey);
+  let cacheKey = null;
+  try {
+    cacheKey = modelCacheKey(provider, hashKey ? await keyFingerprint(apiKey) : '', normalizedBaseUrl);
+  } catch {
+    // no crypto.subtle — still fetch, just don't cache
+  }
+  if (!isCurrent()) return;
+
+  const cached = cacheKey ? await getCachedModelList(cacheKey).catch(() => null) : null;
+  if (!isCurrent()) return;
+  const fetchedThisSession = Boolean(cached) && liveFetchedModelLists.has(cacheKey);
+  if (cached) {
+    const age = fetchedThisSession ? 'from API' : cached.stale ? 'cached, may be outdated' : 'cached';
+    setList(cached.models, `${cached.models.length} models · ${age}`, fetchedThisSession ? 'live' : 'cache');
+    if (fetchedThisSession && !forceFetch) return;
   }
 
-  const cached = await getCachedModelList(cacheKey);
-  if (cached) setList(cached.models, `${cached.models.length} models · from API`);
-
-  // OpenRouter's list is public; local custom servers usually need no key
-  const hasAuth = provider === 'openrouter' || provider === 'custom' || apiKey;
-  if (!hasAuth || (cached && !cached.stale && !forceFetch)) return;
-
+  const startedAt = nextModelFetchStamp();
   try {
-    const models = await fetchAvailableModels(provider, apiKey, undefined, baseUrl);
+    const models = await fetchAvailableModels(provider, apiKey, undefined, normalizedBaseUrl || undefined);
     if (models && models.length > 0) {
-      await setCachedModelList(cacheKey, models);
-      setList(models, `${models.length} models · from API`);
+      setList(models, `${models.length} models · from API`, 'live');
+      if (cacheKey) {
+        // The list belongs to its own key, so it is cached even if this run was
+        // superseded — unless a later-started fetch already stored a newer one.
+        // Only a stored list counts as fetched this session.
+        await setCachedModelList(cacheKey, models, { startedAt, sessionId: MODEL_FETCH_SESSION_ID }).then(
+          (stored) => { if (stored) liveFetchedModelLists.add(cacheKey); },
+          () => {}
+        );
+      }
     }
-  } catch {
-    // network/auth failure — keep whatever list is showing
+  } catch (err) {
+    // Keep whatever list is showing, but say the live list is missing
+    const reason = err?.message || 'Unknown error';
+    if (state.source !== 'builtin') {
+      setHint(`${datalist.options.length} models · cached — couldn't refresh`, reason);
+    } else if (provider === 'custom') {
+      setHint("Couldn't load the endpoint's model list — type the model ID", reason);
+    } else {
+      setHint("Built-in list — couldn't load the live list", reason);
+    }
   }
 }
 
