@@ -1,8 +1,9 @@
 import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList, customOrigins } from './lib/storage.js';
-import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, normalizeBaseUrl, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
+import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, fetchDeepLTargetLanguages, normalizeBaseUrl, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
 import { testWebhook, requestWebhookPermission, requestOriginPermissions, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
-import { shouldWarnUnknownModel, modelCacheKey, keyFingerprint } from './lib/model-list.js';
+import { shouldWarnUnknownModel, modelCacheKey, keyFingerprint, deeplLangsCacheKey, targetLangOptions } from './lib/model-list.js';
+import { createDeepLLanguageLoader, newTargetLangState, syncTargetLangState, invalidateTargetLangState } from './lib/deepl-languages.js';
 
 // ── DOM refs ────────────────────────────────────────
 const modelConfigsList = document.getElementById('modelConfigsList');
@@ -428,10 +429,16 @@ function addModelConfigCard(config) {
   let modelFetchTimer = 0;
   const scheduleModelRefetch = () => {
     clearTimeout(modelFetchTimer);
-    modelFetchTimer = setTimeout(() => refreshModels(true), 600);
+    modelFetchTimer = setTimeout(() => {
+      refreshModels(true);
+      // DeepL has no model list, but its key's target languages feed the action cards
+      if (providerSelect.value === 'deepl') syncAllActionCardModes(apiKeyInput.value.trim());
+    }, 600);
   };
   const onIdentityInput = () => {
     invalidateModelList();
+    // The action cards on this DeepL key drop its pending language loads now
+    if (providerSelect.value === 'deepl') invalidateDeepLActionCards(card.dataset.configId);
     scheduleModelRefetch();
   };
   apiKeyInput.addEventListener('input', onIdentityInput);
@@ -496,6 +503,8 @@ function addModelConfigCard(config) {
         const usage = await getDeepLUsage(apiKey);
         const fmt = n => n.toLocaleString('pl-PL');
         showResult(`Connection OK — ${fmt(usage.characterCount)} / ${fmt(usage.characterLimit)} characters used`, true);
+        // The key works — action cards whose language load failed retry it
+        if (testedRequest === testTuple()) syncAllActionCardModes(apiKey);
       } else {
         await callAI({
           provider,
@@ -873,13 +882,95 @@ function slotLabel(slot) {
 
 // DeepL-backed actions have no template — swap the textarea for a target-language select.
 // The textarea stays in the DOM (hidden) so its value survives switching configs.
-function syncActionCardMode(card, configs) {
-  const select = card.querySelector('.action-model-config');
-  const config = configs.find(c => c.id === select.value) || configs[0];
+// `forceKey` (a DeepL key) bypasses the loader's failure cooldown for cards on
+// that key — passed only by explicit retries (key edit, successful DeepL Test)
+function syncActionCardMode(card, configs, { forceKey } = {}) {
+  const config = actionCardConfig(card, configs);
   const isDeepL = config?.provider === 'deepl';
   card.querySelector('.action-template').hidden = isDeepL;
   card.querySelector('.action-hint').hidden = isDeepL;
   card.querySelector('.action-target-lang').hidden = !isDeepL;
+  const langState = targetLangStates.get(card);
+  if (!langState) return;
+  if (isDeepL) {
+    const force = Boolean(forceKey) && config.apiKey.trim() === forceKey;
+    syncTargetLangState(langState, config.apiKey, targetLangDeps(card), { force });
+  } else if (langState.identity !== null) {
+    // Off DeepL: pending loads must not render; coming back reuses a finished load
+    invalidateTargetLangState(langState);
+  }
+}
+
+// The config an action card runs on (the first one when none is picked)
+function actionCardConfig(card, configs) {
+  const select = card.querySelector('.action-model-config');
+  return configs.find(c => c.id === select.value) || configs[0];
+}
+
+// Re-run syncActionCardMode on every action card — after a DeepL key edit
+// (the model card's debounce) or a successful DeepL Test, cards on that key
+// load (or retry, past the failure cooldown) its languages
+function syncAllActionCardModes(forceKey) {
+  const configs = collectModelConfigs();
+  for (const card of actionsList.querySelectorAll('.action-card')) syncActionCardMode(card, configs, { forceKey });
+}
+
+// A DeepL key is being edited: drop the old key's pending loads in the cards
+// on that config at once (the refetch itself stays debounced) and show the
+// built-in list meanwhile
+function invalidateDeepLActionCards(configId) {
+  const configs = collectModelConfigs();
+  for (const card of actionsList.querySelectorAll('.action-card')) {
+    const langState = targetLangStates.get(card);
+    if (!langState || actionCardConfig(card, configs)?.id !== configId) continue;
+    invalidateTargetLangState(langState);
+    renderTargetLanguages(card, DEEPL_TARGET_LANGUAGES);
+  }
+}
+
+// ── DeepL target languages ─────────────────────────
+// Per action card state (newTargetLangState in lib/deepl-languages.js)
+const targetLangStates = new WeakMap();
+
+// One load per DeepL key per page session, shared by every action card on that
+// key; a failed or empty load is dropped, so the next sync retries
+const loadDeepLLanguages = createDeepLLanguageLoader({
+  readCached: async (apiKey) => {
+    const key = deeplLangsCacheKey(await keyFingerprint(apiKey));
+    return key ? (await getCachedModelList(key))?.models || null : null;
+  },
+  fetchLive: async (apiKey) => {
+    const startedAt = nextModelFetchStamp();
+    const langs = await fetchDeepLTargetLanguages(apiKey);
+    if (langs.length > 0) {
+      const key = await keyFingerprint(apiKey).then(deeplLangsCacheKey, () => null);
+      if (key) await setCachedModelList(key, langs, { startedAt, sessionId: MODEL_FETCH_SESSION_ID }).catch(() => {});
+    }
+    return langs;
+  }
+});
+
+const targetLangDeps = (card) => ({
+  load: loadDeepLLanguages,
+  render: (list) => renderTargetLanguages(card, list),
+  fallback: DEEPL_TARGET_LANGUAGES
+});
+
+// Rebuild the select from `list`, keeping the saved and the selected value
+function renderTargetLanguages(card, list) {
+  const select = card.querySelector('.action-target-lang');
+  const { options, value } = targetLangOptions(list, {
+    saved: targetLangStates.get(card)?.saved,
+    current: select.value
+  });
+  select.textContent = '';
+  for (const lang of options) {
+    const opt = document.createElement('option');
+    opt.value = lang.id;
+    opt.textContent = lang.name;
+    select.appendChild(opt);
+  }
+  select.value = value;
 }
 
 // ── Actions ─────────────────────────────────────────
@@ -907,13 +998,10 @@ function addActionCard(action) {
   templateInput.value = action.template;
   displayModeSelect.value = action.displayMode || 'auto';
 
-  for (const lang of DEEPL_TARGET_LANGUAGES) {
-    const opt = document.createElement('option');
-    opt.value = lang.id;
-    opt.textContent = lang.name;
-    if (lang.id === action.targetLang) opt.selected = true;
-    targetLangSelect.appendChild(opt);
-  }
+  // Rendered for every card (the value is collected even when hidden);
+  // syncActionCardMode loads the live list once the config is DeepL
+  targetLangStates.set(card, newTargetLangState(action.targetLang));
+  renderTargetLanguages(card, DEEPL_TARGET_LANGUAGES);
 
   const noneOpt = document.createElement('option');
   noneOpt.value = '';
@@ -1335,6 +1423,15 @@ async function onSave() {
   try {
     await saveSettings({ modelConfigs, webhooks, actions, tooltipSettings, floatingButtonSettings, systemPrompt, darkMode });
     persistThemeBootValue(darkMode);
+    // The stored target language changed — later re-renders must not bring
+    // back the old one. Taken from the persisted snapshot, not the live select.
+    const savedTargetLangs = new Map(actions.map(a => [a.id, a.targetLang]));
+    for (const card of actionsList.querySelectorAll('.action-card')) {
+      const langState = targetLangStates.get(card);
+      if (langState && savedTargetLangs.has(card.dataset.actionId)) {
+        langState.saved = savedTargetLangs.get(card.dataset.actionId) || '';
+      }
+    }
     floatingAllSitesStored = floatingButtonSettings.allSites;
     syncFloatingVisibility();
     const granted = await permissionsPromise;
