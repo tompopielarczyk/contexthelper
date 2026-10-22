@@ -520,15 +520,6 @@ body {
   min-height: 60px;
 }
 
-.action-hint code {
-  font-family: var(--font-mono);
-  background: var(--gray-100);
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 11px;
-  color: var(--orange-600);
-}
-
 .action-delete {
   flex-shrink: 0;
   margin-top: 4px;
@@ -749,11 +740,93 @@ body {
   gap: 8px;
 }
 
-/* Full row above the selects — the dropdowns leave no room beside it */
+/* Round "?" before the selects; the placeholder help shows on hover/focus */
 .action-hint {
-  flex-basis: 100%;
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  outline: none;
+}
+
+.action-hint[hidden] {
+  display: none;
+}
+
+.action-hint-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--gray-300);
+  color: var(--gray-500);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.action-hint:hover .action-hint-icon,
+.action-hint:focus-visible .action-hint-icon {
+  border-color: var(--orange-500);
+  color: var(--orange-500);
+}
+
+/* Inverted colors in both themes (the gray scale flips in dark mode) */
+.action-hint-tip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 340px;
+  max-width: calc(100vw - 48px);
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--gray-900);
+  color: var(--gray-50);
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+  pointer-events: none;
+}
+
+.action-hint:hover .action-hint-tip,
+.action-hint:focus-visible .action-hint-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.action-hint-title {
+  font-weight: 600;
+}
+
+.action-hint-note {
+  opacity: 0.7;
   font-size: 11px;
-  color: var(--gray-400);
+}
+
+.action-hint-tip code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--orange-400);
+  margin-right: 4px;
+}
+
+/* Light tooltip in dark mode: darker orange keeps the code readable */
+html[data-theme="dark"] .action-hint-tip code {
+  color: var(--orange-700);
 }
 
 /* The three selects share the row and stretch to the card's full width */

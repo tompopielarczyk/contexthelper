@@ -422,7 +422,17 @@
         <textarea class="input action-template" placeholder="Template (use {{text}} as placeholder)" rows="3" data-field="template"></textarea>
         <select class="input input-select action-target-lang" data-field="targetLang" title="Translation target language" hidden></select>
         <div class="action-meta-row">
-          <span class="action-hint">Placeholders: <code>{{text}}</code> (required), <code>{{context}}</code> (surrounding paragraph), <code>{{pageTitle}}</code>, <code>{{pageUrl}}</code></span>
+          <span class="action-hint" tabindex="0">
+            <span class="action-hint-icon" aria-hidden="true">?</span>
+            <span class="action-hint-tip" role="tooltip">
+              <span class="action-hint-title">Template placeholders</span>
+              <span class="action-hint-item"><code>{{text}}</code> the selected text — <strong>required</strong>, every template needs it</span>
+              <span class="action-hint-item"><code>{{context}}</code> the paragraph or text field around the selection (up to ~2000 characters) — helps translate or explain in context</span>
+              <span class="action-hint-item"><code>{{pageTitle}}</code> the title of the current tab</span>
+              <span class="action-hint-item"><code>{{pageUrl}}</code> the address of the current tab</span>
+              <span class="action-hint-note">The page placeholders send that page content to your AI provider. Other <code>{{…}}</code> text is kept as typed.</span>
+            </span>
+          </span>
           <select class="input input-select action-model-config" data-field="modelConfigId" title="Model to use">
           </select>
           <select class="input input-select action-display-mode" data-field="displayMode" title="Result display mode">
