@@ -334,6 +334,7 @@ function addModelConfigCard(config) {
     modelAutoFilled = false;
     listState.verified = null;
     modelWarn.hidden = true;
+    testResult.hidden = true;
   });
   modelInput.addEventListener('change', validateModel);
 
@@ -345,6 +346,10 @@ function addModelConfigCard(config) {
     listState.source = 'builtin';
     listState.verified = null;
     modelWarn.hidden = true;
+    testResult.hidden = true;
+    // Swap the old identity's list for the built-in one (custom: the
+    // placeholder) right away — the refetch may still be debounced
+    refreshModels(false, { renderOnly: true });
   };
 
   const onListUpdate = () => {
@@ -356,7 +361,7 @@ function addModelConfigCard(config) {
     if (document.activeElement !== modelInput) validateModel();
   };
 
-  const refreshModels = (forceFetch) => populateModelDatalist({
+  const refreshModels = (forceFetch, { renderOnly = false } = {}) => populateModelDatalist({
     datalist: modelDatalist,
     hintEl: modelHint,
     state: listState,
@@ -364,6 +369,7 @@ function addModelConfigCard(config) {
     apiKey: apiKeyInput.value.trim(),
     baseUrl: baseUrlInput.value.trim(),
     forceFetch,
+    renderOnly,
     onUpdate: onListUpdate
   });
   refreshModels(false);
@@ -435,9 +441,17 @@ function addModelConfigCard(config) {
   testBtn.addEventListener('click', async () => {
     const btnText = testBtn.querySelector('.btn-text');
     const btnSpinner = testBtn.querySelector('.btn-spinner');
+    // Snapshot the whole request before any await — the permission prompt and
+    // the call itself take time, and the card may be edited meanwhile
     const provider = providerSelect.value;
     const apiKey = apiKeyInput.value.trim();
+    const model = modelInput.value.trim();
+    const effort = effortSelect.value;
     const testedTuple = cardTuple();
+    // A result for an identity the card no longer shows is not rendered
+    const showResult = (message, success) => {
+      if (testedTuple === cardTuple()) showTestResultInCard(testResult, message, success);
+    };
 
     // Custom endpoints need a runtime grant for their origin. Request it
     // before any await — chrome.permissions.request needs the click gesture.
@@ -452,7 +466,7 @@ function addModelConfigCard(config) {
         showTestResultInCard(testResult, err.message, false);
         return;
       }
-      if (!modelInput.value.trim()) {
+      if (!model) {
         showTestResultInCard(testResult, 'Enter a model ID', false);
         return;
       }
@@ -469,28 +483,27 @@ function addModelConfigCard(config) {
 
     try {
       if (provider === 'custom' && !await grantedPromise) {
-        showTestResultInCard(testResult, `Permission for ${origin} denied`, false);
+        showResult(`Permission for ${origin} denied`, false);
         return;
       }
       if (provider === 'deepl') {
         const usage = await getDeepLUsage(apiKey);
         const fmt = n => n.toLocaleString('pl-PL');
-        showTestResultInCard(testResult, `Connection OK — ${fmt(usage.characterCount)} / ${fmt(usage.characterLimit)} characters used`, true);
+        showResult(`Connection OK — ${fmt(usage.characterCount)} / ${fmt(usage.characterLimit)} characters used`, true);
       } else {
-        const model = modelInput.value.trim();
         await callAI({
           provider,
           apiKey,
           model,
           baseUrl,
-          effort: effortSelect.value,
+          effort,
           prompt: 'Say OK'
         });
-        showTestResultInCard(testResult, 'Connection OK', true);
+        showResult('Connection OK', true);
         markVerified(testedTuple);
       }
     } catch (err) {
-      showTestResultInCard(testResult, err.message, false);
+      showResult(err.message, false);
     } finally {
       btnText.textContent = 'Test';
       btnSpinner.hidden = true;
@@ -548,8 +561,15 @@ function closestModelId(target, ids) {
 }
 
 // Cache keys whose live list was fetched during this page session — their
-// cached copy is as good as live, so only forceFetch fetches them again
+// cached copy is as good as live, so only forceFetch fetches them again. A
+// cache key already names the whole list identity (provider + key
+// fingerprint, openrouter, custom base URL + key fingerprint).
 const liveFetchedModelLists = new Set();
+
+// Strictly increasing fetch-start stamps: the cache drops a list whose fetch
+// started before the stored one's (an older request that finished last)
+let lastModelFetchStamp = 0;
+const nextModelFetchStamp = () => (lastModelFetchStamp = Math.max(Date.now(), lastModelFetchStamp + 1));
 
 // Fill a card's datalist, stale-while-revalidate: the built-in list at once,
 // then the cached list for this key, then a live fetch — always on the first
@@ -557,7 +577,9 @@ const liveFetchedModelLists = new Set();
 // edit, successful Test). `state` is the card's listState: each run takes a
 // new `seq` (the card also bumps it on provider/key/base-URL edits), and a
 // superseded run never touches the list, the hint or `state.source`.
-async function populateModelDatalist({ datalist, hintEl, state, provider, apiKey, baseUrl, forceFetch, onUpdate }) {
+// `renderOnly` stops after the built-in list (an identity edit whose refetch
+// is still debounced must not keep offering the old key's list).
+async function populateModelDatalist({ datalist, hintEl, state, provider, apiKey, baseUrl, forceFetch, onUpdate, renderOnly }) {
   const seq = ++state.seq;
   const isCurrent = () => state.seq === seq;
   if (provider === 'deepl') return;
@@ -595,14 +617,17 @@ async function populateModelDatalist({ datalist, hintEl, state, provider, apiKey
   } else {
     setList(getAvailableModels(provider), 'Built-in list', 'builtin');
   }
+  if (renderOnly) return;
 
   // OpenRouter's list is public; local custom servers usually need no key.
-  // The others are cached per key fingerprint — a key may see its own models.
-  const keyed = provider !== 'openrouter' && provider !== 'custom';
-  if (keyed && !apiKey) return;
+  // The others are cached per key fingerprint — a key may see its own models
+  // (a custom endpoint too, when it has a key).
+  const keyRequired = provider !== 'openrouter' && provider !== 'custom';
+  if (keyRequired && !apiKey) return;
+  const hashKey = provider !== 'openrouter' && Boolean(apiKey);
   let cacheKey = null;
   try {
-    cacheKey = modelCacheKey(provider, keyed ? await keyFingerprint(apiKey) : '', normalizedBaseUrl);
+    cacheKey = modelCacheKey(provider, hashKey ? await keyFingerprint(apiKey) : '', normalizedBaseUrl);
   } catch {
     // no crypto.subtle — still fetch, just don't cache
   }
@@ -617,14 +642,19 @@ async function populateModelDatalist({ datalist, hintEl, state, provider, apiKey
     if (fetchedThisSession && !forceFetch) return;
   }
 
+  const startedAt = nextModelFetchStamp();
   try {
     const models = await fetchAvailableModels(provider, apiKey, undefined, normalizedBaseUrl || undefined);
     if (models && models.length > 0) {
       setList(models, `${models.length} models · from API`, 'live');
       if (cacheKey) {
-        // The list belongs to its own key, so it is cached even if this run was superseded
-        await setCachedModelList(cacheKey, models).catch(() => {});
-        liveFetchedModelLists.add(cacheKey);
+        // The list belongs to its own key, so it is cached even if this run was
+        // superseded — unless a later-started fetch already stored a newer one.
+        // Only a stored list counts as fetched this session.
+        await setCachedModelList(cacheKey, models, { startedAt }).then(
+          (stored) => { if (stored) liveFetchedModelLists.add(cacheKey); },
+          () => {}
+        );
       }
     }
   } catch (err) {
