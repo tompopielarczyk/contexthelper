@@ -351,8 +351,7 @@ test('non-streaming request unchanged', async (t) => {
   assert.equal('stream' in calls[0].body, false);
   assert.deepEqual(calls[0].body, {
     model: 'm',
-    max_completion_tokens: 16000,
-    temperature: 0.3,
+    max_completion_tokens: 25000,
     messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'p' }]
   });
 });
@@ -441,7 +440,7 @@ test('single-prompt Gemini body is unchanged', async (t) => {
   assert.match(calls[0].url, /\/gm:generateContent$/);
   assert.equal(calls[0].options.body, JSON.stringify({
     contents: [{ parts: [{ text: 'p' }] }],
-    generationConfig: { maxOutputTokens: 4096, temperature: 0.3 },
+    generationConfig: { maxOutputTokens: 16000 },
     systemInstruction: { parts: [{ text: 's' }] }
   }));
 
@@ -457,7 +456,9 @@ test('openrouter request shape', async (t) => {
   assert.equal(calls[0].body.max_tokens, 4096);
   assert.equal('max_completion_tokens' in calls[0].body, false);
   assert.equal(calls[0].options.headers['HTTP-Referer'], 'https://github.com/contexthelper');
-  assert.equal(calls[0].options.headers['X-Title'], 'ContextHelper');
+  assert.equal(calls[0].options.headers['X-OpenRouter-Title'], 'ContextHelper');
+  assert.equal('X-Title' in calls[0].options.headers, false);
+  assert.equal(calls[0].body.temperature, 0.3);
   assert.equal(calls[0].options.headers['Authorization'], 'Bearer k');
 });
 
@@ -465,8 +466,9 @@ test('openai request uses max_completion_tokens', async (t) => {
   const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), { status: 200 }));
   await callAI({ provider: 'openai', apiKey: 'k', model: 'm', prompt: 'p' });
   assert.equal(calls[0].url, 'https://api.openai.com/v1/chat/completions');
-  assert.equal(calls[0].body.max_completion_tokens, 16000);
+  assert.equal(calls[0].body.max_completion_tokens, 25000);
   assert.equal('max_tokens' in calls[0].body, false);
+  assert.equal('temperature' in calls[0].body, false);
 });
 
 test('single assistant message keeps the Gemini model role', async (t) => {
@@ -474,7 +476,7 @@ test('single assistant message keeps the Gemini model role', async (t) => {
   await callAI({ provider: 'google', apiKey: 'k', model: 'gm', messages: [{ role: 'assistant', content: 'Draft' }] });
   assert.equal(calls[0].options.body, JSON.stringify({
     contents: [{ role: 'model', parts: [{ text: 'Draft' }] }],
-    generationConfig: { maxOutputTokens: 4096, temperature: 0.3 }
+    generationConfig: { maxOutputTokens: 16000 }
   }));
 });
 
@@ -689,13 +691,13 @@ const okChat = (content) => jsonResponse(200, { choices: [{ message: { content }
 test('a temperature 400 is retried once without temperature, and the model is remembered', async (t) => {
   let n = 0;
   const calls = stubFetch(t, () => (++n === 1 ? jsonResponse(400, TEMPERATURE_400) : okChat('ok')));
-  assert.equal(await callAI({ provider: 'openai', apiKey: 'k', model: 'reasoner-a', prompt: 'p' }), 'ok');
+  assert.equal(await callAI({ provider: 'openrouter', apiKey: 'k', model: 'reasoner-a', prompt: 'p' }), 'ok');
   assert.equal(calls.length, 2);
   assert.equal(calls[0].body.temperature, 0.3);
   assert.equal('temperature' in calls[1].body, false);
 
   // Same url + model: no temperature from the first request on
-  assert.equal(await callAI({ provider: 'openai', apiKey: 'k', model: 'reasoner-a', prompt: 'p' }), 'ok');
+  assert.equal(await callAI({ provider: 'openrouter', apiKey: 'k', model: 'reasoner-a', prompt: 'p' }), 'ok');
   assert.equal(calls.length, 3);
   assert.equal('temperature' in calls[2].body, false);
 });
@@ -714,7 +716,7 @@ test('the temperature fallback also covers streaming and other chat-completions 
 
 test('an unrelated 400 is not retried', async (t) => {
   const calls = stubFetch(t, () => jsonResponse(400, { error: { message: 'Invalid messages array' } }));
-  await assert.rejects(callAI({ provider: 'openai', apiKey: 'k', model: 'reasoner-b', prompt: 'p' }), /Invalid messages array/);
+  await assert.rejects(callAI({ provider: 'openrouter', apiKey: 'k', model: 'reasoner-b', prompt: 'p' }), /Invalid messages array/);
   assert.equal(calls.length, 1);
 });
 
@@ -724,11 +726,11 @@ test('two temperature 400s in a row reject after two calls', async (t) => {
   assert.equal(calls.length, 2);
 });
 
-test('OpenAI gets a 16 000 token budget, OpenRouter keeps max_tokens 4096', async (t) => {
+test('OpenAI gets a 25 000 token budget, OpenRouter keeps max_tokens 4096', async (t) => {
   const calls = stubFetch(t, () => okChat('ok'));
   await callAI({ provider: 'openai', apiKey: 'k', model: 'gpt-x', prompt: 'p' });
   await callAI({ provider: 'openrouter', apiKey: 'k', model: 'some/model', prompt: 'p' });
-  assert.equal(calls[0].body.max_completion_tokens, 16000);
+  assert.equal(calls[0].body.max_completion_tokens, 25000);
   assert.equal(calls[1].body.max_tokens, 4096);
   assert.equal('max_completion_tokens' in calls[1].body, false);
 });
