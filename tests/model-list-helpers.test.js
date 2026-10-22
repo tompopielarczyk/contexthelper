@@ -36,6 +36,8 @@ test('cache keys: per key fingerprint, bare openrouter, custom per base URL, non
   assert.equal(modelCacheKey('google', '000000000000'), 'google:000000000000');
   assert.equal(modelCacheKey('openrouter', 'abcdef012345'), 'openrouter');
   assert.equal(modelCacheKey('custom', '', 'http://localhost:11434/v1'), 'custom:http://localhost:11434/v1');
+  // A keyed endpoint may list different models per key
+  assert.equal(modelCacheKey('custom', 'abcdef012345', 'https://llm.example.com/v1'), 'custom:https://llm.example.com/v1:abcdef012345');
   assert.equal(modelCacheKey('deepl', 'abcdef012345'), null);
 });
 
