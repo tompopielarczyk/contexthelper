@@ -121,7 +121,7 @@ test('buildActionPrompt: selected text and page data cannot forge <text> or <pag
 });
 
 test('defuseFenceTags leaves ordinary angle brackets alone', () => {
-  assert.equal(defuseFenceTags('a < b, <textarea>, <texts>, x<text>y, <text id=1>'), 'a < b, <textarea>, <texts>, x‹text>y, <text id=1>');
+  assert.equal(defuseFenceTags('a < b, <textarea>, <texts>, <text-box>, x<text>y'), 'a < b, <textarea>, <texts>, <text-box>, x‹text>y');
 });
 
 test('migrateContextPlaceholder runs once: an action that already has the checkbox field keeps {{context}} as typed', () => {
@@ -131,6 +131,9 @@ test('migrateContextPlaceholder runs once: an action that already has the checkb
     { template: '{{text}} {{context}}', includePageContext: true });
 });
 
-test('defuseFenceTags touches only bare tags, not components with attributes', () => {
-  assert.equal(defuseFenceTags('<Text style={s}>Hi</Text> and </text> < TEXT >'), '<Text style={s}>Hi‹/Text> and ‹/text> ‹ TEXT >');
+test('defuseFenceTags catches fence names with attributes, slashes and invisible characters', () => {
+  assert.equal(defuseFenceTags('</text x> <text/> </\u200btext> <\u2060page_context id=1> < TEXT >'),
+    '‹/text x> ‹text/> ‹/\u200btext> ‹\u2060page_context id=1> ‹ TEXT >');
+  // Harmless cost: a <Text …> component in selected code is defused too
+  assert.equal(defuseFenceTags('<Text style={s}>Hi</Text>'), '‹Text style={s}>Hi‹/Text>');
 });
