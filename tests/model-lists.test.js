@@ -43,6 +43,23 @@ test('anthropic: stops after 5 pages even when has_more stays true', async (t) =
   assert.deepEqual(ids(models), ['m1', 'm2', 'm3', 'm4', 'm5']);
 });
 
+test('anthropic: a repeated last_id ends the loop, duplicate ids are dropped', async (t) => {
+  const calls = stubFetch(t, () => json({ data: [{ id: 'same' }], has_more: true, last_id: 'same' }));
+  const models = await fetchAvailableModels('anthropic', 'k');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(ids(models), ['same']);
+});
+
+test('google: a repeated nextPageToken ends the loop, duplicate ids are dropped', async (t) => {
+  const calls = stubFetch(t, () => json({
+    models: [{ name: 'models/gemini-x', supportedGenerationMethods: ['generateContent'] }],
+    nextPageToken: 'stuck'
+  }));
+  const models = await fetchAvailableModels('google', 'k');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(ids(models), ['gemini-x']);
+});
+
 test('anthropic: has_more without last_id ends the loop', async (t) => {
   const calls = stubFetch(t, () => json({ data: [{ id: 'x' }], has_more: true }));
   await fetchAvailableModels('anthropic', 'k');
