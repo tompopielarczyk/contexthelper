@@ -51,8 +51,9 @@ ContextHelper runs user-defined AI actions (translate, rewrite, explain, summari
 Tick:
 - **Website content** — the text the user selects, and for actions where the user enables Page context, the surrounding paragraphs, page title and URL. Sent only to the AI provider (or webhook) the user configured, when the user runs an action.
 - **Authentication information** — the user's own API keys, stored locally and sent only to the matching provider's API.
+- **Personal communications** — the selected text can be an email or chat message the user is reading or writing (e.g. "Improve writing" on a draft). Over-disclosing is safer than a reviewer deciding it was missing.
 
-Leave unticked: personally identifiable information, health, financial and payment, personal communications, location, web history, user activity.
+Leave unticked: personally identifiable information, health, financial and payment, location, web history, user activity.
 
 Certify all three:
 - I do not sell or transfer user data to third parties, outside of the approved use cases.
