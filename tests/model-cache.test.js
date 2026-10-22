@@ -78,3 +78,30 @@ test('a non-object cache is replaced', async () => {
   await setCachedModelList('openrouter', models('r'));
   assert.deepEqual(Object.keys(store.modelListCache), ['openrouter']);
 });
+
+test('an older fetch finishing last does not overwrite a newer list', async () => {
+  const store = installLocalStorage();
+  const newer = await setCachedModelList('openrouter', models('new'), { startedAt: 200 });
+  const older = await setCachedModelList('openrouter', models('old'), { startedAt: 100 });
+  assert.equal(newer, true);
+  assert.equal(older, false);
+  assert.deepEqual(store.modelListCache.openrouter.models, models('new'));
+  assert.deepEqual((await getCachedModelList('openrouter')).models, models('new'));
+});
+
+test('overlapping fetches written concurrently keep the later-started list', async () => {
+  const store = installLocalStorage();
+  const results = await Promise.all([
+    setCachedModelList('anthropic:k', models('b'), { startedAt: 2 }),
+    setCachedModelList('anthropic:k', models('a'), { startedAt: 1 })
+  ]);
+  assert.deepEqual(results, [true, false]);
+  assert.deepEqual(store.modelListCache['anthropic:k'].models, models('b'));
+});
+
+test('a later-started fetch replaces the list', async () => {
+  const store = installLocalStorage();
+  await setCachedModelList('openrouter', models('a'), { startedAt: 1 });
+  assert.equal(await setCachedModelList('openrouter', models('b'), { startedAt: 2 }), true);
+  assert.deepEqual(store.modelListCache.openrouter.models, models('b'));
+});
