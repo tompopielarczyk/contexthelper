@@ -3,7 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { callAI } from '../lib/api-client.js';
+import { callAI, normalizeStopReason } from '../lib/api-client.js';
+import { isRetryableError } from '../lib/chat.js';
 
 const encoder = new TextEncoder();
 const REAL_FETCH = globalThis.fetch;
@@ -260,4 +261,119 @@ test('abort during the retry rejects with AbortError', async (t) => {
     (err) => err.name === 'AbortError'
   );
   assert.equal(calls.length, 2);
+});
+
+// ── Stop reasons and empty answers ──
+
+test('normalizeStopReason across providers', () => {
+  const cases = {
+    length: ['max_tokens', 'length', 'MAX_TOKENS'],
+    refusal: ['refusal', 'content_filter', 'SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'],
+    stop: ['end_turn', 'stop_sequence', 'stop', 'STOP'],
+    other: ['CONTINUATION', 'RECITATION', 'OTHER', 'tool_calls', 'pause_turn', 'model_context_window_exceeded']
+  };
+  for (const [expected, raws] of Object.entries(cases)) {
+    for (const raw of raws) assert.equal(normalizeStopReason(raw), expected, raw);
+  }
+  assert.equal(normalizeStopReason(null), '');
+  assert.equal(normalizeStopReason(''), '');
+});
+
+const BUDGET = /^The model used its whole token budget on reasoning — lower Reasoning effort$/;
+const DECLINED = /^The model declined to answer$/;
+const finalError = (re) => (err) => err.name === 'APIError' && re.test(err.message) && !isRetryableError(err);
+const generic = (re) => (err) => err.name === 'APIError' && re.test(err.message) && isRetryableError(err);
+const run = (provider, extra = {}) => callAI({ provider, apiKey: 'k', model: 'stop-m', prompt: 'p', ...extra });
+const streamRun = (provider) => run(provider, { onDelta: () => {} });
+
+const anthropicStream = (stop_reason, text) => streamResponse([
+  ...(text ? [sse({ type: 'content_block_delta', delta: { type: 'text_delta', text } }, 'content_block_delta')] : []),
+  sse({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'hmm' } }, 'content_block_delta'),
+  sse({ type: 'message_delta', delta: { stop_reason }, usage: { output_tokens: 16000 } }, 'message_delta'),
+  sse({ type: 'message_stop' }, 'message_stop')
+]);
+
+test('anthropic stream: empty answer with max_tokens is the budget error', async (t) => {
+  stubFetch(t, () => anthropicStream('max_tokens'));
+  await assert.rejects(streamRun('anthropic'), finalError(BUDGET));
+});
+
+test('anthropic stream: refusal (HTTP 200) is the declined error', async (t) => {
+  stubFetch(t, () => anthropicStream('refusal'));
+  await assert.rejects(streamRun('anthropic'), finalError(DECLINED));
+});
+
+test('anthropic stream: text with max_tokens is returned (a cut answer is still an answer)', async (t) => {
+  stubFetch(t, () => anthropicStream('max_tokens', 'Partial'));
+  assert.equal(await streamRun('anthropic'), 'Partial');
+});
+
+test('anthropic stream: message_delta does not end the stream', async (t) => {
+  stubFetch(t, () => streamResponse([
+    sse({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } }, 'content_block_delta'),
+    sse({ type: 'message_delta', delta: { stop_reason: 'end_turn' } }, 'message_delta')
+  ]));
+  await assert.rejects(streamRun('anthropic'), generic(/stream ended unexpectedly/));
+});
+
+test('anthropic non-stream: stop_reason classifies an empty answer', async (t) => {
+  let reason = 'max_tokens';
+  stubFetch(t, () => jsonResponse(200, { content: [{ type: 'thinking', thinking: 'x' }], stop_reason: reason }));
+  await assert.rejects(run('anthropic'), finalError(BUDGET));
+  reason = 'refusal';
+  await assert.rejects(run('anthropic'), finalError(DECLINED));
+  reason = 'end_turn';
+  await assert.rejects(run('anthropic'), generic(/Anthropic returned an empty response/));
+});
+
+test('chat completions: length and content_filter classify an empty answer, stream and non-stream', async (t) => {
+  let reason = 'length';
+  stubFetch(t, (url, options) => (JSON.parse(options.body).stream
+    ? streamResponse([sse({ choices: [{ delta: { content: '' }, finish_reason: reason }] })])
+    : jsonResponse(200, { choices: [{ message: { content: '' }, finish_reason: reason }] })));
+  await assert.rejects(streamRun('openai'), finalError(BUDGET));
+  await assert.rejects(run('openai'), finalError(BUDGET));
+  reason = 'content_filter';
+  await assert.rejects(streamRun('openrouter'), finalError(DECLINED));
+  await assert.rejects(run('openrouter'), finalError(DECLINED));
+});
+
+test('gemini: MAX_TOKENS and the blocking reasons classify an empty answer', async (t) => {
+  let reason = 'MAX_TOKENS';
+  stubFetch(t, (url) => {
+    const payload = { candidates: [{ content: { parts: [{ text: 'thoughts', thought: true }] }, finishReason: reason }] };
+    return url.includes('alt=sse') ? streamResponse([sse(payload)]) : jsonResponse(200, payload);
+  });
+  await assert.rejects(streamRun('google'), finalError(BUDGET));
+  await assert.rejects(run('google'), finalError(BUDGET));
+  for (reason of ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII']) {
+    await assert.rejects(streamRun('google'), finalError(DECLINED), reason);
+    await assert.rejects(run('google'), finalError(DECLINED), reason);
+  }
+});
+
+test('gemini stream: a blocked prompt is the declined error', async (t) => {
+  stubFetch(t, () => streamResponse([sse({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } })]));
+  await assert.rejects(streamRun('google'), finalError(DECLINED));
+});
+
+test('gemini CONTINUATION ends the stream with the text so far', async (t) => {
+  stubFetch(t, (url) => {
+    const payload = { candidates: [{ content: { parts: [{ text: 'So far' }] }, finishReason: 'CONTINUATION' }] };
+    // The streaming body hangs: only the finishReason can end the read
+    if (!url.includes('alt=sse')) return jsonResponse(200, payload);
+    return new Response(new ReadableStream({ start(c) { c.enqueue(encoder.encode(sse(payload))); } }), { status: 200 });
+  });
+  assert.equal(await run('google', { onDelta: () => {}, streamTimeouts: { idleMs: 1000, totalMs: 2000 } }), 'So far');
+  assert.equal(await run('google'), 'So far');
+});
+
+test('gemini CONTINUATION with no text stays a generic, retryable empty response', async (t) => {
+  stubFetch(t, () => streamResponse([sse({ candidates: [{ content: { parts: [] }, finishReason: 'CONTINUATION' }] })]));
+  await assert.rejects(streamRun('google'), generic(/empty response \(CONTINUATION\)/));
+});
+
+test('partial text then EOF stays a retryable "ended unexpectedly"', async (t) => {
+  stubFetch(t, () => streamResponse([sse({ choices: [{ delta: { content: 'half' }, finish_reason: null }] })]));
+  await assert.rejects(streamRun('openai'), generic(/ended unexpectedly/));
 });

@@ -16,8 +16,9 @@ test('extracts provider text when present', () => {
 
 test('throws useful errors for empty or blocked provider responses', () => {
   assert.throws(() => extractAnthropicText({ content: [] }), /empty response/i);
-  assert.throws(() => extractChatCompletionText({ choices: [{ finish_reason: 'content_filter', message: {} }] }, 'OpenAI'), /content_filter/i);
-  assert.throws(() => extractGeminiText({ promptFeedback: { blockReason: 'SAFETY' } }), /SAFETY/i);
+  assert.throws(() => extractChatCompletionText({ choices: [{ finish_reason: 'content_filter', message: {} }] }, 'OpenAI'), /^APIError: The model declined to answer$/);
+  assert.throws(() => extractGeminiText({ promptFeedback: { blockReason: 'SAFETY' } }), /^APIError: The model declined to answer$/);
+  assert.throws(() => extractGeminiText({ promptFeedback: { blockReason: 'OTHER' } }), /empty response \(OTHER\)/);
 });
 
 test('SSE parser buffers split lines, CRLF, comments, DONE', () => {
@@ -287,7 +288,7 @@ test('gemini thought parts are not answer text', async (t) => {
   );
   assert.throws(
     () => extractGeminiText({ candidates: [{ content: { parts: [{ text: 'only thoughts', thought: true }] }, finishReason: 'MAX_TOKENS' }] }),
-    /empty response \(MAX_TOKENS\)/
+    /whole token budget on reasoning/
   );
   stubFetch(t, () => streamResponse([
     sse({ candidates: [{ content: { parts: [{ text: 'reasoning', thought: true }] } }] }),
@@ -427,10 +428,10 @@ test('network drop mid-stream rejects with a retryable APIError', async (t) => {
 });
 
 test('streamed Gemini finish with no text keeps the reason', async (t) => {
-  stubFetch(t, () => streamResponse([sse({ candidates: [{ content: { parts: [] }, finishReason: 'SAFETY' }] })]));
+  stubFetch(t, () => streamResponse([sse({ candidates: [{ content: { parts: [] }, finishReason: 'RECITATION' }] })]));
   await assert.rejects(
     callAI({ provider: 'google', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {} }),
-    /Google Gemini returned an empty response \(SAFETY\)/
+    /Google Gemini returned an empty response \(RECITATION\)/
   );
 });
 
