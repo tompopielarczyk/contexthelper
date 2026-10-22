@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { saveSettings, customOrigins, getSettings, actionsSyncUsage } from '../lib/storage.js';
+import { saveSettings, customOrigins, getSettings, actionsSyncUsage, getDefaultSystemPrompt } from '../lib/storage.js';
 
 function validSettings(overrides = {}) {
   return {
@@ -380,4 +380,17 @@ test('a hand-written <text> fence around {{text}} is removed on read and on save
     actions: [{ name: 'Fenced', template: 'Fix.\n\n<text>\n{{text}}\n</text>', displayMode: 'auto', modelConfigId: 'mc_1', includePageContext: false }]
   }));
   assert.equal(calls.sync[0].actions[0].template, 'Fix.\n\n{{text}}');
+});
+
+test('the 1.0.x default system prompt, saved by every old Save, is replaced by the current default', async () => {
+  const stored = { sync: { systemPrompt: 'Respond in plain text without markdown formatting. Be concise and helpful.' }, local: { modelConfigs: [] } };
+  const area = (name) => ({
+    get: async (defaults) => ({ ...defaults, ...stored[name] }),
+    set: async (payload) => Object.assign(stored[name], payload),
+    remove: async () => {}
+  });
+  globalThis.chrome = { storage: { sync: area('sync'), local: area('local') } };
+  assert.equal((await getSettings()).systemPrompt, getDefaultSystemPrompt());
+  stored.sync.systemPrompt = 'My own prompt';
+  assert.equal((await getSettings()).systemPrompt, 'My own prompt');
 });

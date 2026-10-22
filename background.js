@@ -4,7 +4,8 @@ import { sendWebhook, renderTemplate } from './lib/webhook.js';
 import {
   shouldStream, createThrottle, isRetryableError,
   ASK_ACTION_ID, pickLLMConfig, resolveActionConfig, sanitizeConversation, buildRefineMessages,
-  resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError, nextChunk
+  resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError, nextChunk,
+  stripEchoedFence, resultConversation
 } from './lib/chat.js';
 import { buildActionPrompt, templateUsesPageVars, windowAround, sanitizePageVars, collapseWhitespace } from './lib/prompt.js';
 import { probeSelection, SELECTION_RULES } from './lib/page-probe.js';
@@ -25,6 +26,9 @@ const CHUNK_THROTTLE_MS = 100;
 // (content.js gives up after LIVENESS_TIMEOUT_MS without one)
 const KEEPALIVE_INTERVAL_MS = 20_000;
 const SENSITIVE_FIELD_MESSAGE = 'ContextHelper does not send password or payment fields';
+// Fail-closed case: the field's frame cannot be scripted (cross-origin or
+// about:blank editor iframe, closed shadow root), so we cannot tell
+const UNCHECKABLE_FIELD_MESSAGE = "ContextHelper can't check this embedded field, so nothing was sent. Copy the text into a regular text field and try again";
 const ACTION_MODEL_REMOVED_MESSAGE = "This action's model was removed — pick another in settings";
 const NO_MODEL_MESSAGE = 'No model configured. Please add a model in the extension settings.';
 
@@ -229,7 +233,7 @@ async function blockSensitiveMenuSelection(info, tab, settings) {
   if (!info.editable) return false;
   const probe = await runSelectionProbe(tab.id, { frameId: info.frameId ?? 0 });
   if (probe && probe.inspected && !probe.sensitive) return false;
-  await showTabNotice(tab.id, SENSITIVE_FIELD_MESSAGE, settings);
+  await showTabNotice(tab.id, probe?.sensitive ? SENSITIVE_FIELD_MESSAGE : UNCHECKABLE_FIELD_MESSAGE, settings);
   return true;
 }
 
@@ -744,7 +748,7 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     }
 
     aiCallStarted = true;
-    const result = await callAI({
+    const rawResult = await callAI({
       provider: config.provider,
       apiKey: config.apiKey,
       model: config.model,
@@ -770,6 +774,8 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
     stopHeartbeat();
 
     const conversationBase = messages?.length ? messages : [{ role: 'user', content: prompt }];
+    // DeepL never sees the <text> fence; an LLM may echo it around the answer
+    const result = isDeepL ? rawResult : stripEchoedFence(rawResult);
 
     // Queued behind any chunk still in flight (see send)
     await send({
@@ -782,7 +788,8 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
       actionId: meta.actionId,
       sourceText: meta.sourceText,
       // DeepL has no conversation to continue
-      conversation: isDeepL ? null : [...conversationBase, { role: 'assistant', content: result }],
+      // (too long to refine later → null, and the tooltip shows no Refine)
+      conversation: isDeepL ? null : resultConversation(conversationBase, result),
       // Send-button data: names only for the menu, payload fields for SEND_WEBHOOK
       // (timestamp is stamped by the background at delivery time)
       webhooks: (settings.webhooks || []).map(w => ({ id: w.id, name: w.name })),

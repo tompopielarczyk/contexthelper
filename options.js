@@ -1,6 +1,6 @@
 import { getSettings, saveSettings, actionsSyncUsage, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList, customOrigins } from './lib/storage.js';
 import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, fetchDeepLTargetLanguages, normalizeBaseUrl, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
-import { testWebhook, requestWebhookPermission, requestOriginPermissions, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
+import { testWebhook, requestWebhookPermission, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
 import { shouldWarnUnknownModel, modelCacheKey, keyFingerprint, deeplLangsCacheKey, targetLangOptions } from './lib/model-list.js';
 import { createDeepLLanguageLoader, newTargetLangState, syncTargetLangState, invalidateTargetLangState } from './lib/deepl-languages.js';
@@ -1430,7 +1430,8 @@ async function onSave() {
   // send or custom-model run would fail with a network error.
   const webhookUrls = webhooks.map(w => w.url).filter(Boolean);
   const customOriginList = customOrigins(modelConfigs);
-  const permissionsPromise = requestOriginPermissions([...webhookUrls, ...customOriginList]);
+  // (They are requested by the one combined restore request below — a second,
+  // concurrent chrome.permissions.request would show two prompts or fail.)
 
   // The all-sites grant/cleanup needs the same gesture — start before any
   // await too. Removing the broad https://*/* grant SUBTRACTS everything it
@@ -1505,15 +1506,20 @@ async function onSave() {
     }
     floatingAllSitesStored = floatingButtonSettings.allSites;
     syncFloatingVisibility();
-    const granted = await permissionsPromise;
+    // Check what the combined request left granted
+    const hasOrigins = (origins) => {
+      const unique = [...new Set(origins.filter(Boolean))];
+      return unique.length ? chrome.permissions.contains({ origins: unique }).catch(() => false) : true;
+    };
+    const webhooksGranted = await hasOrigins(webhookUrls.map(originPatternForUrl));
+    const customGranted = await hasOrigins(customOriginList);
     const warnings = [];
-    if (!granted && webhookUrls.length) warnings.push('webhook origin permission not granted, sending will fail');
-    if (!granted && customOriginList.length) warnings.push('custom endpoint permission not granted');
+    if (!webhooksGranted) warnings.push('webhook origin permission not granted, sending will fail');
+    if (!customGranted) warnings.push('custom endpoint permission not granted');
     if (wantAllSites && !allSitesGranted) warnings.push('all-sites permission denied — floating button stays per-domain');
-    if (!permissionsRestored) warnings.push('some permissions could not be restored — click Save again');
+    if (!permissionsRestored && webhooksGranted && customGranted) warnings.push('some permissions could not be restored — click Save again');
     showSaveStatus(warnings.length ? `Saved — ${warnings.join('; ')}` : 'Saved', warnings.length === 0);
   } catch (err) {
-    await permissionsPromise.catch(() => {});
     showSaveStatus(err.message, false);
   }
 }

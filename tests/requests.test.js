@@ -74,14 +74,13 @@ test('openai: 25 000 max_completion_tokens, never a temperature', async (t) => {
   });
 });
 
-test('openrouter and custom keep max_tokens 4096 and temperature 0.3', async (t) => {
+test('openrouter gets 16 000 max_tokens, custom keeps 4096; both keep temperature 0.3', async (t) => {
   const calls = stubFetch(t, () => okChat());
   await callAI({ provider: 'openrouter', apiKey: 'k', model: 'a/b', prompt: 'p' });
   await callAI({ provider: 'custom', apiKey: '', baseUrl: 'http://localhost:11434/v1', model: 'llama', prompt: 'p' });
-  for (const call of calls) {
-    assert.equal(call.body.max_tokens, 4096);
-    assert.equal(call.body.temperature, 0.3);
-  }
+  assert.equal(calls[0].body.max_tokens, 16000);
+  assert.equal(calls[1].body.max_tokens, 4096);
+  for (const call of calls) assert.equal(call.body.temperature, 0.3);
   assert.equal(calls[0].options.headers['X-OpenRouter-Title'], 'ContextHelper');
   assert.equal(calls[0].options.headers['HTTP-Referer'], 'https://github.com/contexthelper');
 });
@@ -409,4 +408,39 @@ test('gemini CONTINUATION with no text stays a generic, retryable empty response
 test('partial text then EOF stays a retryable "ended unexpectedly"', async (t) => {
   stubFetch(t, () => streamResponse([sse({ choices: [{ delta: { content: 'half' }, finish_reason: null }] })]));
   await assert.rejects(streamRun('openai'), generic(/ended unexpectedly/));
+});
+
+test('openrouter: a model with a smaller output cap gets one retry at 4096, remembered', async (t) => {
+  const calls = stubFetch(t, (url, options, n) => (n === 1
+    ? jsonResponse(400, { error: { message: 'max_tokens: 16000 is greater than the maximum allowed (8192) for this model' } })
+    : okChat('ok')));
+  const req = { provider: 'openrouter', apiKey: 'k', model: 'small/cap-model', prompt: 'p' };
+  assert.equal(await callAI(req), 'ok');
+  assert.deepEqual(calls.map(c => c.body.max_tokens), [16000, 4096]);
+  await callAI(req);
+  assert.equal(calls[2].body.max_tokens, 4096);
+});
+
+test('non-streaming calls get the 240 s deadline, streaming header wait stays 90 s', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  globalThis.fetch = (url, options) => new Promise((resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+  });
+  t.after(() => { globalThis.fetch = REAL_FETCH; });
+  let settled = null;
+  const run = callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p' })
+    .then(() => { settled = 'ok'; }, (err) => { settled = err.message; });
+  t.mock.timers.tick(90_001);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(settled, null, 'still waiting after 90 s');
+  t.mock.timers.tick(150_000);
+  await run;
+  assert.match(settled, /timed out/i);
+
+  let streamSettled = null;
+  const streamRun = callAI({ provider: 'anthropic', apiKey: 'k', model: 'm', prompt: 'p', onDelta: () => {} })
+    .then(() => { streamSettled = 'ok'; }, (err) => { streamSettled = err.message; });
+  t.mock.timers.tick(90_001);
+  await streamRun;
+  assert.match(streamSettled, /timed out/i);
 });

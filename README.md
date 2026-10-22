@@ -56,7 +56,7 @@ Select text, run an action, get the result in a tooltip — with one-click webho
 ## Privacy
 
 - Selected text goes **directly from your browser to the provider you chose** — nowhere else
-- Page context (surrounding text, URL, title) is sent only if your action template asks for it
+- Page context (surrounding text, URL, title) is sent only for actions with **Page context** ticked (on by default for the translation and Explain actions) or whose template uses `{{pageTitle}}` / `{{pageUrl}}`
 - API keys are stored locally (`chrome.storage.local`), never synced, never transmitted except to the provider's official API
 - No analytics, no telemetry
 - Site access is **opt-in per domain** — the extension does not request access to all websites

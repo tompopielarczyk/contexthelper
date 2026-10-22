@@ -454,7 +454,7 @@ test('openrouter request shape', async (t) => {
   const calls = stubFetch(t, () => new Response(JSON.stringify({ choices: [{ message: { content: 'x' } }] }), { status: 200 }));
   await callAI({ provider: 'openrouter', apiKey: 'k', model: 'm', prompt: 'p' });
   assert.equal(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
-  assert.equal(calls[0].body.max_tokens, 4096);
+  assert.equal(calls[0].body.max_tokens, 16000);
   assert.equal('max_completion_tokens' in calls[0].body, false);
   assert.equal(calls[0].options.headers['HTTP-Referer'], 'https://github.com/contexthelper');
   assert.equal(calls[0].options.headers['X-OpenRouter-Title'], 'ContextHelper');
@@ -727,12 +727,12 @@ test('two temperature 400s in a row reject after two calls', async (t) => {
   assert.equal(calls.length, 2);
 });
 
-test('OpenAI gets a 25 000 token budget, OpenRouter keeps max_tokens 4096', async (t) => {
+test('OpenAI gets a 25 000 token budget, OpenRouter 16 000 max_tokens', async (t) => {
   const calls = stubFetch(t, () => okChat('ok'));
   await callAI({ provider: 'openai', apiKey: 'k', model: 'gpt-x', prompt: 'p' });
   await callAI({ provider: 'openrouter', apiKey: 'k', model: 'some/model', prompt: 'p' });
   assert.equal(calls[0].body.max_completion_tokens, 25000);
-  assert.equal(calls[1].body.max_tokens, 4096);
+  assert.equal(calls[1].body.max_tokens, 16000);
   assert.equal('max_completion_tokens' in calls[1].body, false);
 });
 
