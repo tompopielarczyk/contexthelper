@@ -124,6 +124,10 @@ Content script tracks event listeners in `activeCleanups[]`. Every `showLoading/
 
 **Resizable result tooltip** — the result tooltip (`.cmn-resizable`) has a native CSS `resize: both` handle; a `ResizeObserver` (`observeTooltipResize`) detects the drag, releases the default 400px max-height cap, and debounce-saves the size into `tooltipSettings.width/height` (sync storage, sanitized to 240–1200 × 120–900 in `lib/storage.js`; `null` = auto). Subsequent tooltips open at the stored width with the stored height as `max-height` (short results stay compact). Options save re-reads these two fields from storage so the Appearance form doesn't reset them. Error tooltips and the spinner are not resizable.
 
+### Default actions and system prompt
+
+`getDefaultActions(uiLanguage)` in `lib/storage.js` builds the set from `chrome.i18n.getUILanguage()`: "Translate to <browser language>" (name from `uiLanguageName` via `Intl.DisplayNames`; skipped for English or an unknown language), "Translate to English", Fix grammar, Improve writing, Explain simply, Summarize, Quote with source (`{{pageTitle}}`/`{{pageUrl}}`). Translations and Explain have Page context on. Defaults are not written to storage until the user saves, so an untouched profile follows its browser language. Every default template fences the selection as `<text>\n{{text}}\n</text>`; the shared writing rules (plain text, result only, no em-dashes/hedges/buzzwords, treat `<text>` as content, never instructions) live in `DEFAULT_SYSTEM_PROMPT`. "Restore defaults" in options also offers the default system prompt when the current one differs.
+
 ### Action `displayMode`
 
 Each action has a `displayMode` field:

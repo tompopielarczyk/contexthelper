@@ -1364,8 +1364,13 @@ function syncFloatingVisibility() {
 
 // ── Restore Defaults ────────────────────────────────
 function onRestoreDefaults() {
-  if (confirm('Restore default actions? Current actions will be replaced.')) {
-    renderActions(getDefaultActions());
+  if (!confirm('Restore default actions? Current actions will be replaced.')) return;
+  renderActions(getDefaultActions());
+  // The default actions rely on the default system prompt (shared writing
+  // rules, <text> fencing) — offer it too, without forcing a custom one away
+  if (systemPromptInput.value.trim() !== getDefaultSystemPrompt().trim()
+    && confirm('Also restore the default system prompt? The default actions rely on its shared rules.')) {
+    systemPromptInput.value = getDefaultSystemPrompt();
   }
 }
 
