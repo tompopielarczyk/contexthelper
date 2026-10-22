@@ -316,6 +316,11 @@ function addModelConfigCard(config) {
   const cardTuple = () => JSON.stringify([
     providerSelect.value, apiKeyInput.value.trim(), baseUrlInput.value.trim(), modelInput.value.trim()
   ]);
+  // A Test result also depends on the effort it sent
+  const testTuple = () => JSON.stringify([cardTuple(), effortSelect.value]);
+  effortSelect.addEventListener('change', () => {
+    testResult.hidden = true;
+  });
 
   // Flag models missing from the provider's live list (retired IDs, typos) before
   // Test/save. Non-blocking, and never against the dated built-in list.
@@ -448,9 +453,10 @@ function addModelConfigCard(config) {
     const model = modelInput.value.trim();
     const effort = effortSelect.value;
     const testedTuple = cardTuple();
-    // A result for an identity the card no longer shows is not rendered
+    const testedRequest = testTuple();
+    // A result for a request the card no longer shows (identity, model or effort edited) is not rendered
     const showResult = (message, success) => {
-      if (testedTuple === cardTuple()) showTestResultInCard(testResult, message, success);
+      if (testedRequest === testTuple()) showTestResultInCard(testResult, message, success);
     };
 
     // Custom endpoints need a runtime grant for their origin. Request it
@@ -566,8 +572,11 @@ function closestModelId(target, ids) {
 // fingerprint, openrouter, custom base URL + key fingerprint).
 const liveFetchedModelLists = new Set();
 
-// Strictly increasing fetch-start stamps: the cache drops a list whose fetch
-// started before the stored one's (an older request that finished last)
+// Strictly increasing fetch-start stamps, tagged with this page's session id:
+// the cache drops a list whose fetch started before the stored one's in the
+// same session (an older request that finished last); another session's
+// stamps are not comparable, so its entries are always replaced
+const MODEL_FETCH_SESSION_ID = crypto.randomUUID();
 let lastModelFetchStamp = 0;
 const nextModelFetchStamp = () => (lastModelFetchStamp = Math.max(Date.now(), lastModelFetchStamp + 1));
 
@@ -651,7 +660,7 @@ async function populateModelDatalist({ datalist, hintEl, state, provider, apiKey
         // The list belongs to its own key, so it is cached even if this run was
         // superseded — unless a later-started fetch already stored a newer one.
         // Only a stored list counts as fetched this session.
-        await setCachedModelList(cacheKey, models, { startedAt }).then(
+        await setCachedModelList(cacheKey, models, { startedAt, sessionId: MODEL_FETCH_SESSION_ID }).then(
           (stored) => { if (stored) liveFetchedModelLists.add(cacheKey); },
           () => {}
         );
