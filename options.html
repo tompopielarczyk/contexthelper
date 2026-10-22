@@ -252,7 +252,7 @@
               <div class="placeholder-help-body">
                 <p class="placeholder-help-lead">Click a placeholder to copy it, then paste it into an action's prompt.</p>
                 <ul class="placeholder-list">
-                  <li><button type="button" class="placeholder-chip" data-copy="{{text}}">{{text}}</button><span>the selected text — <strong>required</strong> in every prompt</span></li>
+                  <li><button type="button" class="placeholder-chip" data-copy="{{text}}">{{text}}</button><span>the selected text — <strong>required</strong> in every prompt. It is inserted inside <code>&lt;text&gt;…&lt;/text&gt;</code> tags, so the model treats it as content to work on, never as instructions. No need to add the tags yourself.</span></li>
                   <li><button type="button" class="placeholder-chip" data-copy="{{pageTitle}}">{{pageTitle}}</button><span>the title of the current tab</span></li>
                   <li><button type="button" class="placeholder-chip" data-copy="{{pageUrl}}">{{pageUrl}}</button><span>the address of the current tab</span></li>
                 </ul>

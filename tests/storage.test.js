@@ -373,3 +373,11 @@ test('actionsSyncUsage measures the stored form of the actions', () => {
   const pl = actionsSyncUsage([longAction('P', 0), { ...longAction('Q', 0), template: '{{text}} ' + 'ą'.repeat(500) }]);
   assert.ok(pl.actions[1].bytes - pl.actions[0].bytes >= 1000);
 });
+
+test('a hand-written <text> fence around {{text}} is removed on read and on save', async () => {
+  const calls = installChromeStorageMock();
+  await saveSettings(validSettings({
+    actions: [{ name: 'Fenced', template: 'Fix.\n\n<text>\n{{text}}\n</text>', displayMode: 'auto', modelConfigId: 'mc_1', includePageContext: false }]
+  }));
+  assert.equal(calls.sync[0].actions[0].template, 'Fix.\n\n{{text}}');
+});

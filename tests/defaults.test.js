@@ -18,7 +18,7 @@ test('an English or unknown browser language gets a single translation action', 
   }
 });
 
-test('default set: ids unique, text fenced in <text> tags, page context where it helps', () => {
+test('default set: ids unique, {{text}} last and unfenced (the placeholder fences it), page context where it helps', () => {
   const actions = getDefaultActions('pl');
   assert.deepEqual(actions.map(a => a.name), [
     'Translate to Polish', 'Translate to English', 'Fix grammar', 'Improve writing',
@@ -26,7 +26,8 @@ test('default set: ids unique, text fenced in <text> tags, page context where it
   ]);
   assert.equal(new Set(actions.map(a => a.id)).size, actions.length);
   for (const a of actions) {
-    assert.ok(a.template.includes('<text>\n{{text}}\n</text>'), a.name);
+    assert.ok(a.template.includes('\n\n{{text}}'), a.name);
+    assert.equal(/<\/?text>/i.test(a.template), false, `${a.name}: no hand-written fence`);
     assert.equal(a.template.includes('**'), false, `${a.name}: no markdown`);
     assert.equal(typeof a.includePageContext, 'boolean');
   }

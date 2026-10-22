@@ -1469,8 +1469,9 @@ html[data-theme="dark"] {
 
 .placeholder-list li {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
+  line-height: 1.5;
 }
 
 .placeholder-chip {
