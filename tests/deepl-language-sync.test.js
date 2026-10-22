@@ -56,7 +56,7 @@ test('loader: a failed fetch resolves null and is dropped, so the key retries', 
   const first = load('a');
   fetches[0].reject(new Error('net'));
   assert.equal(await first.live, null);
-  load('a');
+  load('a', { force: true }); // an explicit retry (within the failure cooldown)
   assert.equal(fetches.length, 2);
 });
 
@@ -65,7 +65,7 @@ test('loader: an empty list counts as a failure (dropped, retried)', async () =>
   const first = load('a');
   fetches[0].resolve([]);
   assert.equal(await first.live, null);
-  load('a');
+  load('a', { force: true });
   assert.equal(fetches.length, 2);
 });
 
@@ -124,7 +124,7 @@ test('sync: a failed load resets the identity, so the next sync with the same ke
   fetches[0].reject(new Error('net'));
   await flush();
   assert.equal(state.identity, null);
-  syncTargetLangState(state, 'a', deps);
+  syncTargetLangState(state, 'a', deps, { force: true });
   assert.equal(fetches.length, 2);
   fetches[1].resolve(LIVE_A);
   await flush();
@@ -137,7 +137,7 @@ test('sync: an empty live list also lets the same key retry', async () => {
   syncTargetLangState(state, 'a', deps);
   fetches[0].resolve([]);
   await flush();
-  syncTargetLangState(state, 'a', deps);
+  syncTargetLangState(state, 'a', deps, { force: true });
   assert.equal(fetches.length, 2);
 });
 
@@ -165,6 +165,66 @@ test('invalidate: a late failure of the old load does not reset the new identity
   fetches[0].reject(new Error('net'));
   await flush();
   assert.equal(state.identity, 'b');
+});
+
+// ── Failure cooldown ──
+
+function setupClock() {
+  let now = 1_000_000;
+  const fetches = [];
+  const load = createDeepLLanguageLoader({
+    readCached: async () => null,
+    fetchLive: async (key) => { fetches.push(key); throw new Error('403'); },
+    now: () => now,
+    cooldownMs: 30_000
+  });
+  const deps = { load, render: () => {}, fallback: FALLBACK };
+  return { fetches, load, deps, advance: (ms) => { now += ms; } };
+}
+
+test('cooldown: routine syncs after a failure make no request within 30 s', async () => {
+  const { fetches, deps, advance } = setupClock();
+  const state = newTargetLangState('');
+  syncTargetLangState(state, 'bad', deps);
+  await flush();
+  assert.equal(fetches.length, 1);
+  for (let i = 0; i < 5; i++) {
+    advance(1_000);
+    syncTargetLangState(state, 'bad', deps); // e.g. a config-name keystroke
+    await flush();
+  }
+  assert.equal(fetches.length, 1);
+});
+
+test('cooldown: a forced sync (key edit, DeepL Test) retries at once', async () => {
+  const { fetches, deps } = setupClock();
+  const state = newTargetLangState('');
+  syncTargetLangState(state, 'bad', deps);
+  await flush();
+  syncTargetLangState(state, 'bad', deps, { force: true });
+  await flush();
+  assert.equal(fetches.length, 2);
+});
+
+test('cooldown: after 30 s a routine sync retries once', async () => {
+  const { fetches, deps, advance } = setupClock();
+  const state = newTargetLangState('');
+  syncTargetLangState(state, 'bad', deps);
+  await flush();
+  advance(30_001);
+  syncTargetLangState(state, 'bad', deps);
+  await flush();
+  assert.equal(fetches.length, 2);
+  syncTargetLangState(state, 'bad', deps);
+  await flush();
+  assert.equal(fetches.length, 2);
+});
+
+test('cooldown is per key: another key still fetches', async () => {
+  const { fetches, load } = setupClock();
+  await load('bad').live;
+  await load('other').live;
+  assert.deepEqual(fetches, ['bad', 'other']);
 });
 
 test('invalidate then the same key: reuses the finished load, no new fetch', async () => {

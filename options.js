@@ -432,7 +432,7 @@ function addModelConfigCard(config) {
     modelFetchTimer = setTimeout(() => {
       refreshModels(true);
       // DeepL has no model list, but its key's target languages feed the action cards
-      if (providerSelect.value === 'deepl') syncAllActionCardModes();
+      if (providerSelect.value === 'deepl') syncAllActionCardModes(apiKeyInput.value.trim());
     }, 600);
   };
   const onIdentityInput = () => {
@@ -504,7 +504,7 @@ function addModelConfigCard(config) {
         const fmt = n => n.toLocaleString('pl-PL');
         showResult(`Connection OK — ${fmt(usage.characterCount)} / ${fmt(usage.characterLimit)} characters used`, true);
         // The key works — action cards whose language load failed retry it
-        if (testedRequest === testTuple()) syncAllActionCardModes();
+        if (testedRequest === testTuple()) syncAllActionCardModes(apiKey);
       } else {
         await callAI({
           provider,
@@ -882,7 +882,9 @@ function slotLabel(slot) {
 
 // DeepL-backed actions have no template — swap the textarea for a target-language select.
 // The textarea stays in the DOM (hidden) so its value survives switching configs.
-function syncActionCardMode(card, configs) {
+// `forceKey` (a DeepL key) bypasses the loader's failure cooldown for cards on
+// that key — passed only by explicit retries (key edit, successful DeepL Test)
+function syncActionCardMode(card, configs, { forceKey } = {}) {
   const config = actionCardConfig(card, configs);
   const isDeepL = config?.provider === 'deepl';
   card.querySelector('.action-template').hidden = isDeepL;
@@ -891,7 +893,8 @@ function syncActionCardMode(card, configs) {
   const langState = targetLangStates.get(card);
   if (!langState) return;
   if (isDeepL) {
-    syncTargetLangState(langState, config.apiKey, targetLangDeps(card));
+    const force = Boolean(forceKey) && config.apiKey.trim() === forceKey;
+    syncTargetLangState(langState, config.apiKey, targetLangDeps(card), { force });
   } else if (langState.identity !== null) {
     // Off DeepL: pending loads must not render; coming back reuses a finished load
     invalidateTargetLangState(langState);
@@ -906,10 +909,10 @@ function actionCardConfig(card, configs) {
 
 // Re-run syncActionCardMode on every action card — after a DeepL key edit
 // (the model card's debounce) or a successful DeepL Test, cards on that key
-// load (or retry) its languages
-function syncAllActionCardModes() {
+// load (or retry, past the failure cooldown) its languages
+function syncAllActionCardModes(forceKey) {
   const configs = collectModelConfigs();
-  for (const card of actionsList.querySelectorAll('.action-card')) syncActionCardMode(card, configs);
+  for (const card of actionsList.querySelectorAll('.action-card')) syncActionCardMode(card, configs, { forceKey });
 }
 
 // A DeepL key is being edited: drop the old key's pending loads in the cards
