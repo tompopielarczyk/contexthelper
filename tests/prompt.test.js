@@ -93,7 +93,7 @@ test('buildActionPrompt: title/URL placeholders render and the block is still ap
 test('migrateContextPlaceholder drops {{context}} and turns the Page context box on', () => {
   assert.deepEqual(migrateContextPlaceholder({ template: 'Explain:\n\n{{text}}', includePageContext: false }),
     { template: 'Explain:\n\n{{text}}', includePageContext: false });
-  assert.deepEqual(migrateContextPlaceholder({ template: 'Explain {{text}} using {{context}} please', includePageContext: false }),
+  assert.deepEqual(migrateContextPlaceholder({ template: 'Explain {{text}} using {{context}} please' }),
     { template: 'Explain {{text}} using please', includePageContext: true });
   assert.deepEqual(migrateContextPlaceholder({ template: 'Translate:\n{{text}}\n\nContext:\n{{context}}\n' }),
     { template: 'Translate:\n{{text}}\n\nContext:', includePageContext: true });
@@ -121,5 +121,16 @@ test('buildActionPrompt: selected text and page data cannot forge <text> or <pag
 });
 
 test('defuseFenceTags leaves ordinary angle brackets alone', () => {
-  assert.equal(defuseFenceTags('a < b, <textarea>, <texts>, x<text>y'), 'a < b, <textarea>, <texts>, x‹text>y');
+  assert.equal(defuseFenceTags('a < b, <textarea>, <texts>, x<text>y, <text id=1>'), 'a < b, <textarea>, <texts>, x‹text>y, <text id=1>');
+});
+
+test('migrateContextPlaceholder runs once: an action that already has the checkbox field keeps {{context}} as typed', () => {
+  assert.deepEqual(migrateContextPlaceholder({ template: 'A {{text}}\n\n\n\nB {{context}}', includePageContext: false }),
+    { template: 'A {{text}}\n\n\n\nB {{context}}', includePageContext: false });
+  assert.deepEqual(migrateContextPlaceholder({ template: '{{text}} {{context}}', includePageContext: true }),
+    { template: '{{text}} {{context}}', includePageContext: true });
+});
+
+test('defuseFenceTags touches only bare tags, not components with attributes', () => {
+  assert.equal(defuseFenceTags('<Text style={s}>Hi</Text> and </text> < TEXT >'), '<Text style={s}>Hi‹/Text> and ‹/text> ‹ TEXT >');
 });
