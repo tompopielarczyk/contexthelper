@@ -295,7 +295,15 @@
           </div>
           <div class="field">
             <label class="field-label">Model</label>
-            <input type="text" class="input input-model model-config-model" placeholder="Model ID" autocomplete="off" spellcheck="false">
+            <div class="input-group">
+              <input type="text" class="input input-model model-config-model" placeholder="Model ID" autocomplete="off" spellcheck="false">
+              <button type="button" class="btn-icon model-config-refresh" title="Reload the model list from the provider" aria-label="Reload the model list">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+                  <path d="M21 3v6h-6"/>
+                </svg>
+              </button>
+            </div>
             <datalist class="model-config-datalist"></datalist>
             <span class="field-hint model-config-model-hint" hidden></span>
             <span class="field-hint field-hint-warning model-config-model-warn" hidden></span>
