@@ -233,6 +233,13 @@ test('anthropic rejecting output_config is retried without it and cached', async
   assert.equal('output_config' in calls[2].body, false);
 });
 
+test('gemini: a prose "Thinking level" rejection also drops the effort', async (t) => {
+  const calls = stubFetch(t, (url, options, n) => (n === 1 ? err400('Thinking level is not supported for this model.') : okGemini('ok')));
+  assert.equal(await callAI({ provider: 'google', apiKey: 'k', model: 'fb-g-prose', prompt: 'p', effort: 'low' }), 'ok');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].body.generationConfig, { maxOutputTokens: 16000 });
+});
+
 test('gemini rejecting thinkingLevel: retried, cached across stream and non-stream', async (t) => {
   const calls = stubFetch(t, (url, options, n) => {
     if (n === 1) return err400('Invalid JSON payload received. Unknown name "thinkingLevel" at \'generation_config.thinking_config\'');
