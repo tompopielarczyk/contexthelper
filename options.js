@@ -1,8 +1,8 @@
 import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList, customOrigins } from './lib/storage.js';
-import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, normalizeBaseUrl, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
+import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, fetchDeepLTargetLanguages, normalizeBaseUrl, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
 import { testWebhook, requestWebhookPermission, requestOriginPermissions, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
-import { shouldWarnUnknownModel, modelCacheKey, keyFingerprint } from './lib/model-list.js';
+import { shouldWarnUnknownModel, modelCacheKey, keyFingerprint, deeplLangsCacheKey, targetLangOptions } from './lib/model-list.js';
 
 // ── DOM refs ────────────────────────────────────────
 const modelConfigsList = document.getElementById('modelConfigsList');
@@ -428,7 +428,11 @@ function addModelConfigCard(config) {
   let modelFetchTimer = 0;
   const scheduleModelRefetch = () => {
     clearTimeout(modelFetchTimer);
-    modelFetchTimer = setTimeout(() => refreshModels(true), 600);
+    modelFetchTimer = setTimeout(() => {
+      refreshModels(true);
+      // DeepL has no model list, but its key's target languages feed the action cards
+      if (providerSelect.value === 'deepl') syncAllActionCardModes();
+    }, 600);
   };
   const onIdentityInput = () => {
     invalidateModelList();
@@ -880,6 +884,89 @@ function syncActionCardMode(card, configs) {
   card.querySelector('.action-template').hidden = isDeepL;
   card.querySelector('.action-hint').hidden = isDeepL;
   card.querySelector('.action-target-lang').hidden = !isDeepL;
+  if (isDeepL) syncTargetLanguages(card, config.apiKey);
+}
+
+// Re-run syncActionCardMode on every action card — a DeepL key edit (after
+// the model card's debounce) loads that key's languages where it is used
+function syncAllActionCardModes() {
+  const configs = collectModelConfigs();
+  for (const card of actionsList.querySelectorAll('.action-card')) syncActionCardMode(card, configs);
+}
+
+// ── DeepL target languages ─────────────────────────
+// Per action card: `saved` is the stored targetLang, `identity` the DeepL key
+// whose list the select shows (or is loading), `seq` drops superseded loads
+const targetLangStates = new WeakMap();
+
+// One load per DeepL key per page session, shared by every action card whose
+// config uses that key: `cached` resolves to the cached list (or null), `live`
+// to the API's list (or null on failure — the entry is then dropped, so a
+// later key edit back to it tries again)
+const deeplLangLoads = new Map();
+
+function loadDeepLLanguages(apiKey) {
+  const existing = deeplLangLoads.get(apiKey);
+  if (existing) return existing;
+  const cacheKey = keyFingerprint(apiKey).then(deeplLangsCacheKey, () => null);
+  const cached = cacheKey
+    .then(key => (key ? getCachedModelList(key) : null))
+    .then(entry => entry?.models || null, () => null);
+  const startedAt = nextModelFetchStamp();
+  const load = { cached };
+  load.live = fetchDeepLTargetLanguages(apiKey).then(async (langs) => {
+    if (langs.length === 0) return null;
+    const key = await cacheKey;
+    if (key) await setCachedModelList(key, langs, { startedAt, sessionId: MODEL_FETCH_SESSION_ID }).catch(() => {});
+    return langs;
+  }).catch(() => {
+    if (deeplLangLoads.get(apiKey) === load) deeplLangLoads.delete(apiKey);
+    return null;
+  });
+  deeplLangLoads.set(apiKey, load);
+  return load;
+}
+
+// Rebuild the select from `list`, keeping the saved and the selected value
+function renderTargetLanguages(card, list) {
+  const select = card.querySelector('.action-target-lang');
+  const { options, value } = targetLangOptions(list, {
+    saved: targetLangStates.get(card)?.saved,
+    current: select.value
+  });
+  select.textContent = '';
+  for (const lang of options) {
+    const opt = document.createElement('option');
+    opt.value = lang.id;
+    opt.textContent = lang.name;
+    select.appendChild(opt);
+  }
+  select.value = value;
+}
+
+// The built-in list at once, then the cached list for this key, then the live
+// one. Runs only when the card's DeepL key changed — not on every
+// syncActionCardMode call.
+function syncTargetLanguages(card, apiKey) {
+  const state = targetLangStates.get(card);
+  if (!state) return;
+  const identity = String(apiKey ?? '').trim();
+  if (state.identity === identity) return;
+  state.identity = identity;
+  const seq = ++state.seq;
+  const isCurrent = () => state.seq === seq;
+  renderTargetLanguages(card, DEEPL_TARGET_LANGUAGES);
+  if (!identity) return;
+  const { cached, live } = loadDeepLLanguages(identity);
+  let liveShown = false;
+  cached.then(list => {
+    if (list && isCurrent() && !liveShown) renderTargetLanguages(card, list);
+  });
+  live.then(list => {
+    if (!list || !isCurrent()) return;
+    liveShown = true;
+    renderTargetLanguages(card, list);
+  });
 }
 
 // ── Actions ─────────────────────────────────────────
@@ -907,13 +994,10 @@ function addActionCard(action) {
   templateInput.value = action.template;
   displayModeSelect.value = action.displayMode || 'auto';
 
-  for (const lang of DEEPL_TARGET_LANGUAGES) {
-    const opt = document.createElement('option');
-    opt.value = lang.id;
-    opt.textContent = lang.name;
-    if (lang.id === action.targetLang) opt.selected = true;
-    targetLangSelect.appendChild(opt);
-  }
+  // Rendered for every card (the value is collected even when hidden);
+  // syncActionCardMode loads the live list once the config is DeepL
+  targetLangStates.set(card, { saved: action.targetLang || '', identity: null, seq: 0 });
+  renderTargetLanguages(card, DEEPL_TARGET_LANGUAGES);
 
   const noneOpt = document.createElement('option');
   noneOpt.value = '';
