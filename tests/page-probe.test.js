@@ -339,3 +339,12 @@ test('only paragraph-like blocks grow (a div or table cell stays as is)', (t) =>
   withPage(t, { activeElement: { tagName: 'BODY', isContentEditable: false }, selection, body: block });
   assert.equal(injected(SELECTION_RULES, true).blockText, 'cell text');
 });
+
+test('sibling blocks contribute only their rendered text (innerText), not hidden descendants', (t) => {
+  const withHidden = sib('P', 'Visible label SECRET');
+  withHidden.innerText = 'Visible label';
+  const invisible = sib('P', 'visibility hidden text');
+  invisible.innerText = '';
+  const r = shortParagraph(t, 'Core text.', 0, 4, [invisible], [withHidden]);
+  assert.equal(r.blockText, 'Core text.\n\nVisible label');
+});
