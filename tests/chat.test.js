@@ -92,6 +92,14 @@ test('isRetryableError', () => {
   assert.equal(isRetryableError(null), false);
 });
 
+test('isRetryableError: an APIError marked retryable: false never retries', () => {
+  // Budget spent on reasoning / refusal: retrying the same request gives the same answer
+  for (const status of [0, 429, 500]) {
+    assert.equal(isRetryableError(Object.assign(apiError(status), { retryable: false })), false, String(status));
+  }
+  assert.equal(isRetryableError(Object.assign(apiError(0), { retryable: true })), true);
+});
+
 // --- Task 4: refine ---------------------------------------------------------
 
 const conv = [{ role: 'user', content: 'P' }, { role: 'assistant', content: 'R' }];

@@ -289,6 +289,8 @@ function addModelConfigCard(config) {
   const apiKeyLabel = card.querySelector('.model-config-apikey-label');
   const baseUrlField = card.querySelector('.model-config-baseurl');
   const baseUrlInput = card.querySelector('.model-config-baseurl-input');
+  const effortField = card.querySelector('.model-config-effort-field');
+  const effortSelect = card.querySelector('.model-config-effort');
   const toggleKeyBtn = card.querySelector('.model-config-toggle-key');
   const testBtn = card.querySelector('.model-config-test');
   const testResult = card.querySelector('.model-config-test-result');
@@ -298,6 +300,7 @@ function addModelConfigCard(config) {
   providerSelect.value = config.provider;
   apiKeyInput.value = config.apiKey;
   baseUrlInput.value = config.baseUrl || '';
+  effortSelect.value = config.effort || '';
 
   modelDatalist.id = `model-list-${config.id}`;
   modelInput.setAttribute('list', modelDatalist.id);
@@ -392,6 +395,7 @@ function addModelConfigCard(config) {
   const syncProviderFields = () => {
     const isCustom = providerSelect.value === 'custom';
     modelField.hidden = providerSelect.value === 'deepl';
+    effortField.hidden = providerSelect.value === 'deepl';
     baseUrlField.hidden = !isCustom;
     apiKeyLabel.textContent = isCustom ? 'API Key (optional)' : 'API Key';
   };
@@ -479,6 +483,7 @@ function addModelConfigCard(config) {
           apiKey,
           model,
           baseUrl,
+          effort: effortSelect.value,
           prompt: 'Say OK'
         });
         showTestResultInCard(testResult, 'Connection OK', true);
@@ -785,7 +790,8 @@ function collectModelConfigs() {
       name: card.querySelector('.model-config-name').value.trim(),
       provider,
       model,
-      apiKey: card.querySelector('.model-config-apikey').value.trim()
+      apiKey: card.querySelector('.model-config-apikey').value.trim(),
+      effort: provider === 'deepl' ? '' : card.querySelector('.model-config-effort').value
     };
     if (provider === 'custom') {
       config.baseUrl = card.querySelector('.model-config-baseurl-input').value.trim();

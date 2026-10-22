@@ -749,6 +749,7 @@ async function runChat(tab, settings, buildRequest, retrySpec = null, clientId =
       apiKey: config.apiKey,
       model: config.model,
       baseUrl: config.baseUrl,
+      effort: config.effort,
       prompt,
       messages,
       systemPrompt,
