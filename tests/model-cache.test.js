@@ -81,8 +81,8 @@ test('a non-object cache is replaced', async () => {
 
 test('an older fetch finishing last does not overwrite a newer list', async () => {
   const store = installLocalStorage();
-  const newer = await setCachedModelList('openrouter', models('new'), { startedAt: 200 });
-  const older = await setCachedModelList('openrouter', models('old'), { startedAt: 100 });
+  const newer = await setCachedModelList('openrouter', models('new'), { startedAt: 200, sessionId: 's1' });
+  const older = await setCachedModelList('openrouter', models('old'), { startedAt: 100, sessionId: 's1' });
   assert.equal(newer, true);
   assert.equal(older, false);
   assert.deepEqual(store.modelListCache.openrouter.models, models('new'));
@@ -92,8 +92,8 @@ test('an older fetch finishing last does not overwrite a newer list', async () =
 test('overlapping fetches written concurrently keep the later-started list', async () => {
   const store = installLocalStorage();
   const results = await Promise.all([
-    setCachedModelList('anthropic:k', models('b'), { startedAt: 2 }),
-    setCachedModelList('anthropic:k', models('a'), { startedAt: 1 })
+    setCachedModelList('anthropic:k', models('b'), { startedAt: 2, sessionId: 's1' }),
+    setCachedModelList('anthropic:k', models('a'), { startedAt: 1, sessionId: 's1' })
   ]);
   assert.deepEqual(results, [true, false]);
   assert.deepEqual(store.modelListCache['anthropic:k'].models, models('b'));
@@ -101,7 +101,30 @@ test('overlapping fetches written concurrently keep the later-started list', asy
 
 test('a later-started fetch replaces the list', async () => {
   const store = installLocalStorage();
-  await setCachedModelList('openrouter', models('a'), { startedAt: 1 });
-  assert.equal(await setCachedModelList('openrouter', models('b'), { startedAt: 2 }), true);
+  await setCachedModelList('openrouter', models('a'), { startedAt: 1, sessionId: 's1' });
+  assert.equal(await setCachedModelList('openrouter', models('b'), { startedAt: 2, sessionId: 's1' }), true);
   assert.deepEqual(store.modelListCache.openrouter.models, models('b'));
+});
+
+test('a fetch from another page session wins even with an older stamp', async () => {
+  const store = installLocalStorage();
+  await setCachedModelList('openrouter', models('earlier-session'), { startedAt: 5000, sessionId: 'old-page' });
+  // Clock rolled back, or the counter restarted in a new options page
+  assert.equal(await setCachedModelList('openrouter', models('this-session'), { startedAt: 10, sessionId: 'new-page' }), true);
+  assert.deepEqual(store.modelListCache.openrouter.models, models('this-session'));
+});
+
+test('a write without a session id never rejects and is never rejected by stamp alone', async () => {
+  const store = installLocalStorage();
+  await setCachedModelList('openrouter', models('a'), { startedAt: 5000, sessionId: 's1' });
+  assert.equal(await setCachedModelList('openrouter', models('b')), true);
+  assert.deepEqual(store.modelListCache.openrouter.models, models('b'));
+});
+
+test('an entry fetched "in the future" is pruned and reads as stale', async () => {
+  const future = Date.now() + 365 * DAY;
+  const store = installLocalStorage({ modelListCache: { 'google:abc': { models: models('g'), fetchedAt: future } } });
+  assert.equal((await getCachedModelList('google:abc')).stale, true);
+  await setCachedModelList('openrouter', models('r'));
+  assert.deepEqual(Object.keys(store.modelListCache), ['openrouter']);
 });
