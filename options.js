@@ -3,6 +3,7 @@ import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getD
 import { testWebhook, requestWebhookPermission, requestOriginPermissions, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
 import { shouldWarnUnknownModel, modelCacheKey, keyFingerprint, deeplLangsCacheKey, targetLangOptions } from './lib/model-list.js';
+import { templateUsesPageContext } from './lib/prompt.js';
 import { createDeepLLanguageLoader, newTargetLangState, syncTargetLangState, invalidateTargetLangState } from './lib/deepl-languages.js';
 
 // ── DOM refs ────────────────────────────────────────
@@ -888,7 +889,7 @@ function syncActionCardMode(card, configs, { forceKey } = {}) {
   const config = actionCardConfig(card, configs);
   const isDeepL = config?.provider === 'deepl';
   card.querySelector('.action-template').hidden = isDeepL;
-  card.querySelector('.action-hint').hidden = isDeepL;
+  card.querySelector('.action-page-row').hidden = isDeepL;
   card.querySelector('.action-target-lang').hidden = !isDeepL;
   const langState = targetLangStates.get(card);
   if (!langState) return;
@@ -997,6 +998,24 @@ function addActionCard(action) {
   nameInput.value = action.name;
   templateInput.value = action.template;
   displayModeSelect.value = action.displayMode || 'auto';
+
+  // Page context: the user's choice lives in dataset.userChecked; a template
+  // that places page placeholders itself shows the box ticked and locked
+  const pageContextBox = card.querySelector('.action-include-page');
+  pageContextBox.dataset.userChecked = String(action.includePageContext === true);
+  const syncPageContextBox = () => {
+    const placed = templateUsesPageContext(templateInput.value);
+    pageContextBox.disabled = placed;
+    pageContextBox.checked = placed || pageContextBox.dataset.userChecked === 'true';
+    pageContextBox.closest('label').title = placed
+      ? 'The template already places page data with {{context}} / {{pageTitle}} / {{pageUrl}}'
+      : 'Also send the text around the selection, with the page title and URL, as background for the model';
+  };
+  pageContextBox.addEventListener('change', () => {
+    if (!pageContextBox.disabled) pageContextBox.dataset.userChecked = String(pageContextBox.checked);
+  });
+  templateInput.addEventListener('input', syncPageContextBox);
+  syncPageContextBox();
 
   // Rendered for every card (the value is collected even when hidden);
   // syncActionCardMode loads the live list once the config is DeepL
@@ -1457,8 +1476,9 @@ function collectActions() {
     const modelConfigId = card.querySelector('.action-model-config').value;
     const targetLang = card.querySelector('.action-target-lang').value;
     const shortcutSlot = card.querySelector('.action-shortcut')?.value || '';
+    const includePageContext = card.querySelector('.action-include-page')?.dataset.userChecked === 'true';
     if (name) {
-      actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, targetLang, shortcutSlot });
+      actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, targetLang, shortcutSlot, includePageContext });
     }
   }
   return actions;

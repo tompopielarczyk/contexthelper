@@ -292,3 +292,34 @@ test('getSettings backfills effort on configs saved before it existed', async ()
   const settings = await getSettings();
   assert.deepEqual(settings.modelConfigs.map(c => c.effort), ['', 'medium', '']);
 });
+
+test('includePageContext is stored as a strict boolean', async () => {
+  const calls = installChromeStorageMock();
+  const a = { template: '{{text}}', displayMode: 'auto', modelConfigId: 'mc_1' };
+  await saveSettings(validSettings({
+    actions: [
+      { ...a, name: 'On', includePageContext: true },
+      { ...a, name: 'Truthy string', includePageContext: 'yes' },
+      { ...a, name: 'Missing' }
+    ]
+  }));
+  assert.deepEqual(calls.sync[0].actions.map(x => x.includePageContext), [true, false, false]);
+});
+
+test('getSettings backfills includePageContext on older actions', async () => {
+  const stored = {
+    sync: { actions: [
+      { id: 'a1', name: 'Old', template: '{{text}}' },
+      { id: 'a2', name: 'New', template: '{{text}}', includePageContext: true }
+    ] },
+    local: { modelConfigs: [] }
+  };
+  const area = (name) => ({
+    get: async (defaults) => ({ ...defaults, ...stored[name] }),
+    set: async (payload) => Object.assign(stored[name], payload),
+    remove: async () => {}
+  });
+  globalThis.chrome = { storage: { sync: area('sync'), local: area('local') } };
+  const settings = await getSettings();
+  assert.deepEqual(settings.actions.map(x => x.includePageContext), [false, true]);
+});

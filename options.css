@@ -748,8 +748,28 @@ body {
   outline: none;
 }
 
-.action-hint[hidden] {
+.action-page-row[hidden] {
   display: none;
+}
+
+/* Full row above the selects: the page-context box and the placeholder help */
+.action-page-row {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.action-page-context {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--gray-600);
+  white-space: nowrap;
+}
+
+.action-page-context:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .action-hint-icon {

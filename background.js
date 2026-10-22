@@ -6,7 +6,7 @@ import {
   ASK_ACTION_ID, pickLLMConfig, resolveActionConfig, sanitizeConversation, buildRefineMessages,
   resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError, nextChunk
 } from './lib/chat.js';
-import { renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars, collapseWhitespace } from './lib/prompt.js';
+import { buildActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars, collapseWhitespace } from './lib/prompt.js';
 import { probeSelection, SELECTION_RULES } from './lib/page-probe.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
@@ -634,13 +634,13 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
     if (isDeepL && !action.targetLang) {
       throw new Error('No target language set for this action. Please configure it in settings.');
     }
-    const pageContext = !isDeepL && templateUsesPageContext(action.template)
-      ? (pageVars || await getPageContext(tab))
-      : null;
+    // Page data is read only when the template places it or the action opts in
+    const needsPage = !isDeepL && (templateUsesPageContext(action.template) || action.includePageContext === true);
+    const pageContext = needsPage ? (pageVars || await getPageContext(tab)) : null;
     if (pageContext) retrySpec.pageVars = pageContext;
     const prompt = isDeepL
       ? selectionText
-      : renderActionPrompt(action.template, { text: selectionText, ...pageContext });
+      : buildActionPrompt(action.template, selectionText, { includePageContext: action.includePageContext === true, pageVars: pageContext });
 
     return {
       config,
