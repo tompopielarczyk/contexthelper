@@ -32,6 +32,7 @@
 - **Results your way** — replace the selection in place (inputs, editors, contenteditable) or show a resizable tooltip with a copy button
 - **Webhooks** — send any result to n8n / Make / Zapier / Notion with a fully customizable JSON payload template, one click from the tooltip
 - **Live model lists** — model pickers load current models from each provider's API, with offline fallback
+- **Reasoning effort** — per model config (Default / Low / Medium / High); Low answers faster and cheaper on reasoning models
 - **Dark mode** — follows your system, or force light/dark
 
 ## Screenshots
