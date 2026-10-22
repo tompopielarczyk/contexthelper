@@ -1,27 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ACTION_PLACEHOLDERS, renderActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars, collapseWhitespace, buildActionPrompt } from '../lib/prompt.js';
+import { ACTION_PLACEHOLDERS, renderActionPrompt, templateUsesPageVars, windowAround, sanitizePageVars, collapseWhitespace, buildActionPrompt, migrateContextPlaceholder } from '../lib/prompt.js';
 
 test('ACTION_PLACEHOLDERS lists the action placeholders', () => {
-  assert.deepEqual(ACTION_PLACEHOLDERS, ['text', 'context', 'pageTitle', 'pageUrl']);
+  assert.deepEqual(ACTION_PLACEHOLDERS, ['text', 'pageTitle', 'pageUrl']);
 });
 
 test('renders all placeholders in one pass, literal values', () => {
-  const out = renderActionPrompt('A {{text}} B {{context}} C {{pageTitle}} {{pageUrl}} {{n8n}}',
-    { text: '$& {{context}}', context: 'ctx $1', pageTitle: 'T', pageUrl: 'https://u' });
-  assert.equal(out, 'A $& {{context}} B ctx $1 C T https://u {{n8n}}');
+  const out = renderActionPrompt('A {{text}} C {{pageTitle}} {{pageUrl}} {{n8n}}',
+    { text: '$& {{pageTitle}}', pageTitle: 'T $1', pageUrl: 'https://u' });
+  assert.equal(out, 'A $& {{pageTitle}} C T $1 https://u {{n8n}}');
 });
 
 test('repeated {{text}} replaced everywhere; missing vars empty', () => {
-  assert.equal(renderActionPrompt('{{text}}/{{text}}/{{context}}', { text: 'x' }), 'x/x/');
+  assert.equal(renderActionPrompt('{{text}}/{{text}}/{{pageUrl}}', { text: 'x' }), 'x/x/');
+  // {{context}} is no longer a placeholder (the Page context checkbox replaced it)
+  assert.equal(renderActionPrompt('{{text}} {{context}}', { text: 'x', context: 'c' }), 'x {{context}}');
 });
 
-test('templateUsesPageContext', () => {
-  assert.equal(templateUsesPageContext('{{text}}'), false);
-  assert.equal(templateUsesPageContext('{{text}} {{pageUrl}}'), true);
-  assert.equal(templateUsesPageContext('{{context}}'), true);
-  assert.equal(templateUsesPageContext('{{pageTitle}}'), true);
+test('templateUsesPageVars', () => {
+  assert.equal(templateUsesPageVars('{{text}}'), false);
+  assert.equal(templateUsesPageVars('{{text}} {{pageUrl}}'), true);
+  assert.equal(templateUsesPageVars('{{pageTitle}}'), true);
+  assert.equal(templateUsesPageVars('{{context}}'), false);
 });
 
 test('windowAround keeps selection, marks cuts, respects max', () => {
@@ -82,9 +84,19 @@ test('buildActionPrompt appends a delimited page block when the action includes 
   assert.ok(out.trimEnd().endsWith('not to the page context.'));
 });
 
-test('buildActionPrompt: page placeholders in the template win, nothing is appended', () => {
-  const out = buildActionPrompt('{{text}} | {{context}} | {{pageUrl}}', 'x', { includePageContext: true, pageVars: PAGE_VARS });
-  assert.equal(out, 'x | Para one.\n\nPara two. | https://example.com/a');
+test('buildActionPrompt: title/URL placeholders render and the block is still appended', () => {
+  const out = buildActionPrompt('{{text}} | {{pageUrl}}', 'x', { includePageContext: true, pageVars: PAGE_VARS });
+  assert.ok(out.startsWith('x | https://example.com/a\n\n<page_context>\n'));
+  assert.equal(buildActionPrompt('{{text}} | {{pageUrl}}', 'x', { includePageContext: false, pageVars: PAGE_VARS }), 'x | https://example.com/a');
+});
+
+test('migrateContextPlaceholder drops {{context}} and turns the Page context box on', () => {
+  assert.deepEqual(migrateContextPlaceholder({ template: 'Explain:\n\n{{text}}', includePageContext: false }),
+    { template: 'Explain:\n\n{{text}}', includePageContext: false });
+  assert.deepEqual(migrateContextPlaceholder({ template: 'Explain {{text}} using {{context}} please', includePageContext: false }),
+    { template: 'Explain {{text}} using please', includePageContext: true });
+  assert.deepEqual(migrateContextPlaceholder({ template: 'Translate:\n{{text}}\n\nContext:\n{{context}}\n' }),
+    { template: 'Translate:\n{{text}}\n\nContext:', includePageContext: true });
 });
 
 test('buildActionPrompt: page text cannot close the page block early', () => {

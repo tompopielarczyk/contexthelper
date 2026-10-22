@@ -245,7 +245,20 @@
             </div>
           </div>
 
+
           <div class="card-body">
+            <details class="placeholder-help">
+              <summary>Template placeholders</summary>
+              <div class="placeholder-help-body">
+                <p class="placeholder-help-lead">Click a placeholder to copy it, then paste it into an action's prompt.</p>
+                <ul class="placeholder-list">
+                  <li><button type="button" class="placeholder-chip" data-copy="{{text}}">{{text}}</button><span>the selected text — <strong>required</strong> in every prompt</span></li>
+                  <li><button type="button" class="placeholder-chip" data-copy="{{pageTitle}}">{{pageTitle}}</button><span>the title of the current tab</span></li>
+                  <li><button type="button" class="placeholder-chip" data-copy="{{pageUrl}}">{{pageUrl}}</button><span>the address of the current tab</span></li>
+                </ul>
+                <p class="placeholder-help-note">To give the model the text around the selection, tick <strong>Page context</strong> on the action: the surrounding paragraphs, page title and URL are added after your prompt as background. Page data goes to your AI provider only for actions that use it. Other <code>{{…}}</code> text is kept as typed.</p>
+              </div>
+            </details>
             <div id="actionsList" class="actions-list"></div>
 
             <button type="button" id="addAction" class="btn btn-dashed">
@@ -423,21 +436,10 @@
         <select class="input input-select action-target-lang" data-field="targetLang" title="Translation target language" hidden></select>
         <div class="action-meta-row">
           <div class="action-page-row">
-            <label class="checkbox-label action-page-context" title="Also send the text around the selection, with the page title and URL, as background for the model">
+            <label class="checkbox-label action-page-context" title="Also send the paragraphs around the selection, with the page title and URL, as background for the model">
               <input type="checkbox" class="action-include-page">
               <span>Page context</span>
             </label>
-            <span class="action-hint" tabindex="0">
-              <span class="action-hint-icon" aria-hidden="true">?</span>
-              <span class="action-hint-tip" role="tooltip">
-                <span class="action-hint-title">Template placeholders (advanced)</span>
-                <span class="action-hint-item"><code>{{text}}</code> the selected text — <strong>required</strong>, every template needs it</span>
-                <span class="action-hint-item"><code>{{context}}</code> the paragraph or text field around the selection, plus neighbouring paragraphs when it is short (up to ~2000 characters) — helps translate or explain in context</span>
-                <span class="action-hint-item"><code>{{pageTitle}}</code> the title of the current tab</span>
-                <span class="action-hint-item"><code>{{pageUrl}}</code> the address of the current tab</span>
-                <span class="action-hint-note">Simpler: tick <strong>Page context</strong> — the surrounding text, title and URL are added after your prompt as background. Placing the page placeholders yourself overrides the checkbox. Either way, that page content goes to your AI provider. Other <code>{{…}}</code> text is kept as typed.</span>
-              </span>
-            </span>
           </div>
           <select class="input input-select action-model-config" data-field="modelConfigId" title="Model to use">
           </select>

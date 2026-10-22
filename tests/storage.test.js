@@ -323,3 +323,23 @@ test('getSettings backfills includePageContext on older actions', async () => {
   const settings = await getSettings();
   assert.deepEqual(settings.actions.map(x => x.includePageContext), [false, true]);
 });
+
+test('a template with {{context}} is migrated on read and on save', async () => {
+  const calls = installChromeStorageMock();
+  await saveSettings(validSettings({
+    actions: [{ name: 'Old', template: 'Explain {{text}}\n\nContext: {{context}}', displayMode: 'auto', modelConfigId: 'mc_1' }]
+  }));
+  assert.equal(calls.sync[0].actions[0].template, 'Explain {{text}}\n\nContext:');
+  assert.equal(calls.sync[0].actions[0].includePageContext, true);
+
+  const stored = { sync: { actions: [{ id: 'a1', name: 'Old', template: '{{context}} {{text}}' }] }, local: { modelConfigs: [] } };
+  const area = (name) => ({
+    get: async (defaults) => ({ ...defaults, ...stored[name] }),
+    set: async (payload) => Object.assign(stored[name], payload),
+    remove: async () => {}
+  });
+  globalThis.chrome = { storage: { sync: area('sync'), local: area('local') } };
+  const settings = await getSettings();
+  assert.equal(settings.actions[0].template, '{{text}}');
+  assert.equal(settings.actions[0].includePageContext, true);
+});

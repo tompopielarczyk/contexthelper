@@ -6,7 +6,7 @@ import {
   ASK_ACTION_ID, pickLLMConfig, resolveActionConfig, sanitizeConversation, buildRefineMessages,
   resolveRefineInstruction, sanitizeClientId, buildAskPrompt, missingApiKeyError, nextChunk
 } from './lib/chat.js';
-import { buildActionPrompt, templateUsesPageContext, windowAround, sanitizePageVars, collapseWhitespace } from './lib/prompt.js';
+import { buildActionPrompt, templateUsesPageVars, windowAround, sanitizePageVars, collapseWhitespace } from './lib/prompt.js';
 import { probeSelection, SELECTION_RULES } from './lib/page-probe.js';
 
 const MENU_PARENT_ID = 'contexthelper-parent';
@@ -635,7 +635,7 @@ function runAction(action, { selectionText, editable, pageVars = null }, tab, se
       throw new Error('No target language set for this action. Please configure it in settings.');
     }
     // Page data is read only when the template places it or the action opts in
-    const needsPage = !isDeepL && (templateUsesPageContext(action.template) || action.includePageContext === true);
+    const needsPage = !isDeepL && (templateUsesPageVars(action.template) || action.includePageContext === true);
     const pageContext = needsPage ? (pageVars || await getPageContext(tab)) : null;
     if (pageContext) retrySpec.pageVars = pageContext;
     const prompt = isDeepL
@@ -848,7 +848,7 @@ async function getSelectionFromTab(tabId) {
 }
 
 /**
- * Page context for {{context}} / {{pageTitle}} / {{pageUrl}}: the selection's
+ * Page data for the Page context block and {{pageTitle}} / {{pageUrl}}: the selection's
  * surrounding block (windowed around the selection), plus title and URL.
  * Restricted pages fall back to '' context and the tab's title/url; a
  * sensitive field gives '' context.

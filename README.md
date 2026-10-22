@@ -21,7 +21,7 @@
 
 - **Bring your own key** — works directly with Anthropic (Claude), OpenAI (GPT), Google Gemini, OpenRouter (300+ models incl. open-source), and DeepL
 - **Local models** — any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM), API key optional
-- **Custom actions** — define any prompt with a `{{text}}` placeholder, tick **Page context** to send the surrounding text, page title and URL as background (or place `{{context}}`, `{{pageTitle}}`, `{{pageUrl}}` in the template yourself); reorder, assign models per action
+- **Custom actions** — define any prompt with a `{{text}}` placeholder, tick **Page context** to send the surrounding paragraphs, page title and URL as background; optional `{{pageTitle}}` and `{{pageUrl}}` placeholders; reorder, assign models per action
 - **Streaming results** — answers appear as they are generated; failed requests offer **Retry**
 - **Refine in place** — Shorter, Longer, Simpler or a free-text follow-up, right in the result tooltip
 - **Ask about selection** — type an ad-hoc question about the selected text (menu item or a keyboard shortcut you assign)

@@ -3,7 +3,6 @@ import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getD
 import { testWebhook, requestWebhookPermission, requestOriginPermissions, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
 import { shouldWarnUnknownModel, modelCacheKey, keyFingerprint, deeplLangsCacheKey, targetLangOptions } from './lib/model-list.js';
-import { templateUsesPageContext } from './lib/prompt.js';
 import { createDeepLLanguageLoader, newTargetLangState, syncTargetLangState, invalidateTargetLangState } from './lib/deepl-languages.js';
 
 // ── DOM refs ────────────────────────────────────────
@@ -79,6 +78,7 @@ async function init() {
 
   // Tabs
   initTabs();
+  initPlaceholderChips();
 
   // Dark mode (tri-state: 'auto' | 'light' | 'dark')
   darkModeState = settings.darkMode || 'auto';
@@ -190,6 +190,26 @@ async function init() {
 }
 
 // ── Tabs ───────────────────────────────────────────
+// Template placeholders (Actions tab): a click copies the token
+function initPlaceholderChips() {
+  for (const chip of document.querySelectorAll('.placeholder-chip')) {
+    chip.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(chip.dataset.copy);
+      } catch {
+        return;
+      }
+      chip.classList.add('copied');
+      chip.textContent = 'Copied';
+      clearTimeout(chip._copiedTimer);
+      chip._copiedTimer = setTimeout(() => {
+        chip.classList.remove('copied');
+        chip.textContent = chip.dataset.copy;
+      }, 1200);
+    });
+  }
+}
+
 function initTabs() {
   for (const btn of tabButtons) {
     btn.addEventListener('click', () => activateTab(btn.dataset.tab));
@@ -999,23 +1019,7 @@ function addActionCard(action) {
   templateInput.value = action.template;
   displayModeSelect.value = action.displayMode || 'auto';
 
-  // Page context: the user's choice lives in dataset.userChecked; a template
-  // that places page placeholders itself shows the box ticked and locked
-  const pageContextBox = card.querySelector('.action-include-page');
-  pageContextBox.dataset.userChecked = String(action.includePageContext === true);
-  const syncPageContextBox = () => {
-    const placed = templateUsesPageContext(templateInput.value);
-    pageContextBox.disabled = placed;
-    pageContextBox.checked = placed || pageContextBox.dataset.userChecked === 'true';
-    pageContextBox.closest('label').title = placed
-      ? 'The template already places page data with {{context}} / {{pageTitle}} / {{pageUrl}}'
-      : 'Also send the text around the selection, with the page title and URL, as background for the model';
-  };
-  pageContextBox.addEventListener('change', () => {
-    if (!pageContextBox.disabled) pageContextBox.dataset.userChecked = String(pageContextBox.checked);
-  });
-  templateInput.addEventListener('input', syncPageContextBox);
-  syncPageContextBox();
+  card.querySelector('.action-include-page').checked = action.includePageContext === true;
 
   // Rendered for every card (the value is collected even when hidden);
   // syncActionCardMode loads the live list once the config is DeepL
@@ -1476,7 +1480,7 @@ function collectActions() {
     const modelConfigId = card.querySelector('.action-model-config').value;
     const targetLang = card.querySelector('.action-target-lang').value;
     const shortcutSlot = card.querySelector('.action-shortcut')?.value || '';
-    const includePageContext = card.querySelector('.action-include-page')?.dataset.userChecked === 'true';
+    const includePageContext = card.querySelector('.action-include-page')?.checked === true;
     if (name) {
       actions.push({ id: card.dataset.actionId || generateActionId(), name, template, displayMode, modelConfigId, targetLang, shortcutSlot, includePageContext });
     }
