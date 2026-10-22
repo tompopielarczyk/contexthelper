@@ -1,4 +1,4 @@
-import { getSettings, saveSettings, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList, customOrigins } from './lib/storage.js';
+import { getSettings, saveSettings, actionsSyncUsage, getDefaultActions, getDefaultTooltipSettings, getDefaultFloatingButtonSettings, getDefaultSystemPrompt, generateConfigId, generateWebhookId, generateActionId, getCachedModelList, setCachedModelList, customOrigins } from './lib/storage.js';
 import { getAvailableModels, getDefaultModel, callAI, fetchAvailableModels, getDeepLUsage, fetchDeepLTargetLanguages, normalizeBaseUrl, DEEPL_TARGET_LANGUAGES } from './lib/api-client.js';
 import { testWebhook, requestWebhookPermission, requestOriginPermissions, buildRestoreOrigins, originPatternForUrl, DEFAULT_WEBHOOK_TEMPLATE } from './lib/webhook.js';
 import { resolveTheme, THEME_BOOT_KEY } from './lib/theme.js';
@@ -80,6 +80,7 @@ async function init() {
   initTabs();
   initPlaceholderChips();
   initActionDragAndDrop();
+  initActionsUsage();
 
   // Dark mode (tri-state: 'auto' | 'light' | 'dark')
   darkModeState = settings.darkMode || 'auto';
@@ -1134,6 +1135,41 @@ function dropTarget(clientY) {
     ? target.card.previousElementSibling === draggedCard
     : target.card.nextElementSibling === draggedCard;
   return unchanged ? null : target;
+}
+
+// ── Actions storage meter ──────────────────────────
+// All actions share one chrome.storage.sync item (8 KB). Show the share
+// while editing so a too-long prompt is caught before Save fails.
+const actionsUsageEl = document.getElementById('actionsUsage');
+let actionsUsageTimer = null;
+
+function updateActionsUsage() {
+  const usage = actionsSyncUsage(collectActions());
+  const kb = (bytes) => (bytes / 1024).toFixed(1);
+  const ratio = usage.bytes / usage.limit;
+  actionsUsageEl.classList.toggle('over', ratio > 1);
+  actionsUsageEl.classList.toggle('near', ratio > 0.85 && ratio <= 1);
+  let text = `Actions use ${kb(usage.bytes)} KB of the 8 KB synced storage.`;
+  if (ratio > 1) {
+    const longest = [...usage.actions].sort((a, b) => b.bytes - a.bytes)[0];
+    text += ` Over the limit — Save will fail. Shorten the longest prompts${longest ? ` (e.g. "${longest.name}", ${kb(longest.bytes)} KB)` : ''}.`;
+  } else if (ratio > 0.85) {
+    text += ' Close to the limit — keep new prompts short.';
+  }
+  actionsUsageEl.textContent = text;
+}
+
+function scheduleActionsUsage() {
+  clearTimeout(actionsUsageTimer);
+  actionsUsageTimer = setTimeout(updateActionsUsage, 150);
+}
+
+function initActionsUsage() {
+  actionsList.addEventListener('input', scheduleActionsUsage);
+  actionsList.addEventListener('change', scheduleActionsUsage);
+  // Cards added, removed, reordered or re-rendered
+  new MutationObserver(scheduleActionsUsage).observe(actionsList, { childList: true });
+  updateActionsUsage();
 }
 
 // One set of list-level listeners: the gaps between cards count too

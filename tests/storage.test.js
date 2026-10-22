@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { saveSettings, customOrigins, getSettings } from '../lib/storage.js';
+import { saveSettings, customOrigins, getSettings, actionsSyncUsage } from '../lib/storage.js';
 
 function validSettings(overrides = {}) {
   return {
@@ -342,4 +342,34 @@ test('a template with {{context}} is migrated on read and on save', async () => 
   const settings = await getSettings();
   assert.equal(settings.actions[0].template, '{{text}}');
   assert.equal(settings.actions[0].includePageContext, true);
+});
+
+// ── Actions vs the 8 KB sync item limit ──
+
+const longAction = (name, chars) => ({ name, template: `{{text}} ${'x'.repeat(chars)}`, displayMode: 'auto', modelConfigId: 'mc_1' });
+
+test('too many action bytes: a readable error names the longest actions, nothing is written', async () => {
+  const calls = installChromeStorageMock();
+  await assert.rejects(() => saveSettings(validSettings({
+    actions: [longAction('Short', 100), longAction('Improve e-mail', 4500), longAction('Explain', 3600)]
+  })), (err) => {
+    assert.match(err.message, /^Actions take 8\.\d KB of the 8 KB sync limit/);
+    assert.match(err.message, /"Improve e-mail" \(4\.\d KB\), "Explain" \(3\.\d KB\)/);
+    assert.doesNotMatch(err.message, /"Short"/);
+    return true;
+  });
+  assert.equal(calls.sync.length, 0);
+  assert.equal(calls.local.length, 0);
+});
+
+test('actionsSyncUsage measures the stored form of the actions', () => {
+  const actions = [longAction('A', 1000), longAction('B', 10)];
+  const usage = actionsSyncUsage(actions);
+  assert.equal(usage.limit, 8192);
+  assert.ok(usage.bytes > 1000 && usage.bytes < 1400, String(usage.bytes));
+  assert.deepEqual(usage.actions.map(a => a.name), ['A', 'B']);
+  assert.ok(usage.actions[0].bytes > usage.actions[1].bytes);
+  // UTF-8: Polish letters count twice
+  const pl = actionsSyncUsage([longAction('P', 0), { ...longAction('Q', 0), template: '{{text}} ' + 'ą'.repeat(500) }]);
+  assert.ok(pl.actions[1].bytes - pl.actions[0].bytes >= 1000);
 });

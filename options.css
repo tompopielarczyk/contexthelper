@@ -1507,3 +1507,27 @@ html[data-theme="dark"] .placeholder-chip,
 html[data-theme="dark"] .placeholder-help-note code {
   color: var(--orange-400);
 }
+
+/* Share of the 8 KB sync item the actions use (all actions live in one item) */
+.actions-usage {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.actions-usage.near {
+  color: var(--orange-600);
+}
+
+.actions-usage.over {
+  color: var(--red-600, #dc2626);
+  font-weight: 500;
+}
+
+html[data-theme="dark"] .actions-usage.near {
+  color: var(--orange-400);
+}
+
+html[data-theme="dark"] .actions-usage.over {
+  color: #f87171;
+}
