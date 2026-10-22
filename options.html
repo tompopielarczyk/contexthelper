@@ -306,6 +306,16 @@
           <input type="url" class="input model-config-baseurl-input" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false">
           <span class="field-hint">Ollama: http://localhost:11434/v1, LM Studio: http://localhost:1234/v1. Ollama may need OLLAMA_ORIGINS=chrome-extension://*</span>
         </div>
+        <div class="field model-config-effort-field">
+          <label class="field-label">Reasoning effort</label>
+          <select class="input input-select model-config-effort">
+            <option value="">Default</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+          <span class="field-hint">Low answers faster and cheaper. Default leaves it to the provider; models without the setting run without it.</span>
+        </div>
         <div class="field">
           <label class="field-label model-config-apikey-label">API Key</label>
           <div class="input-group">

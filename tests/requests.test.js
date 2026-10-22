@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 
 import { callAI, normalizeStopReason } from '../lib/api-client.js';
 import { isRetryableError } from '../lib/chat.js';
+import { saveSettings } from '../lib/storage.js';
 
 const encoder = new TextEncoder();
 const REAL_FETCH = globalThis.fetch;
@@ -142,6 +143,31 @@ test('DeepL ignores effort', async (t) => {
   const calls = stubFetch(t, () => jsonResponse(200, { translations: [{ text: 'Hallo' }] }));
   await callAI({ provider: 'deepl', apiKey: 'k:fx', prompt: 'Hi', targetLang: 'DE', effort: 'high' });
   assert.deepEqual(calls[0].body, { text: ['Hi'], target_lang: 'DE' });
+});
+
+test('a saved model config carries its effort into the request body', async (t) => {
+  // saveSettings → stored config → callAI with the config's fields (what runChat does)
+  const stored = [];
+  globalThis.chrome = { storage: { sync: { set: async () => {} }, local: { set: async (p) => stored.push(p) } } };
+  t.after(() => { delete globalThis.chrome; });
+  const configs = [
+    { id: 'a', name: 'A', provider: 'anthropic', model: 'saved-a', apiKey: 'k', effort: 'low' },
+    { id: 'o', name: 'O', provider: 'openai', model: 'saved-o', apiKey: 'k', effort: 'medium' },
+    { id: 'r', name: 'R', provider: 'openrouter', model: 'saved/r', apiKey: 'k', effort: 'high' },
+    { id: 'c', name: 'C', provider: 'custom', model: 'saved-c', apiKey: '', baseUrl: 'http://localhost:1234/v1/', effort: 'low' },
+    { id: 'g', name: 'G', provider: 'google', model: 'saved-g', apiKey: 'k', effort: 'medium' }
+  ];
+  await saveSettings({ modelConfigs: configs });
+  const calls = stubFetch(t, okByUrl);
+  for (const config of stored[0].modelConfigs) {
+    await callAI({ provider: config.provider, apiKey: config.apiKey, model: config.model, baseUrl: config.baseUrl, effort: config.effort, prompt: 'p' });
+  }
+  assert.deepEqual(calls[0].body.output_config, { effort: 'low' });
+  assert.equal(calls[1].body.reasoning_effort, 'medium');
+  assert.deepEqual(calls[2].body.reasoning, { effort: 'high' });
+  assert.equal(calls[3].url, 'http://localhost:1234/v1/chat/completions');
+  assert.equal(calls[3].body.reasoning_effort, 'low');
+  assert.deepEqual(calls[4].body.generationConfig.thinkingConfig, { thinkingLevel: 'MEDIUM' });
 });
 
 // ── Per-field tuning fallback (a 400 before the stream starts) ──

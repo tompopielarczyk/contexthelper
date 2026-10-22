@@ -256,3 +256,39 @@ for (const [provider, model] of [
     assert.equal(settings.modelConfigs[0].model, model);
   });
 }
+
+// ── Reasoning effort on model configs ──
+
+test('effort is stored for valid levels, unknown or missing becomes empty, DeepL never has one', async () => {
+  const calls = installChromeStorageMock();
+  const base = { name: 'M', provider: 'openai', model: 'gpt-x', apiKey: 'k' };
+  await saveSettings(validSettings({
+    modelConfigs: [
+      { ...base, id: 'mc_1', effort: 'high' },
+      { ...base, id: 'mc_2', effort: 'extreme' },
+      { ...base, id: 'mc_3' },
+      { ...base, id: 'mc_4', effort: 'LOW' },
+      { id: 'mc_5', name: 'D', provider: 'deepl', model: '', apiKey: 'k', effort: 'low' }
+    ]
+  }));
+  assert.deepEqual(calls.local[0].modelConfigs.map(c => c.effort), ['high', '', '', '', '']);
+});
+
+test('getSettings backfills effort on configs saved before it existed', async () => {
+  const stored = {
+    sync: {},
+    local: { modelConfigs: [
+      { id: 'a', name: 'A', provider: 'anthropic', model: 'm', apiKey: 'k' },
+      { id: 'b', name: 'B', provider: 'google', model: 'g', apiKey: 'k', effort: 'medium' },
+      { id: 'c', name: 'C', provider: 'openai', model: 'o', apiKey: 'k', effort: 'bogus' }
+    ] }
+  };
+  const area = (name) => ({
+    get: async (defaults) => ({ ...defaults, ...stored[name] }),
+    set: async (payload) => Object.assign(stored[name], payload),
+    remove: async () => {}
+  });
+  globalThis.chrome = { storage: { sync: area('sync'), local: area('local') } };
+  const settings = await getSettings();
+  assert.deepEqual(settings.modelConfigs.map(c => c.effort), ['', 'medium', '']);
+});
